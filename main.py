@@ -1122,11 +1122,7 @@ class ARPhoneInterface:
                     self.latest_phone_frame = phone_frame
                     if self.display_manager:
                         self.display_manager.update_phone_frame(phone_frame)
-                elif self.display_manager and self.latest_phone_frame is None:
-                    # 프레임이 없으면 테스트 프레임 생성
-                    test_frame = self.phone_mirror._create_test_frame()
-                    if test_frame is not None:
-                        self.display_manager.update_phone_frame(test_frame)
+                # 프레임이 없으면 아무것도 표시하지 않음 (dummy 프레임 생성하지 않음)
                 
                 # 디스플레이 업데이트
                 time.sleep(0.016)  # 60 FPS

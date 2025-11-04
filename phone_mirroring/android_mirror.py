@@ -42,10 +42,17 @@ class AndroidMirror:
             bool: 미러링 시작 성공 여부
         """
         try:
+            self.frame_callback = callback
+            self.is_running = True
+            
             # 디바이스 연결 확인
             if not self.is_connected():
-                print("Android 디바이스가 연결되지 않았습니다")
-                return False
+                print("Android 디바이스가 연결되지 않았습니다 - adb screencap 모드로 실행")
+                # 연결되지 않아도 adb screencap 루프는 시작
+                self.mirror_thread = threading.Thread(target=self._mirror_loop)
+                self.mirror_thread.daemon = True
+                self.mirror_thread.start()
+                return True
             
             # scrcpy 명령어 구성 (최적화된 설정)
             cmd = [
@@ -71,9 +78,6 @@ class AndroidMirror:
                 stderr=subprocess.PIPE,
                 stdin=subprocess.PIPE
             )
-            
-            self.frame_callback = callback
-            self.is_running = True
             
             # 미러링 스레드 시작
             self.mirror_thread = threading.Thread(target=self._mirror_loop)
@@ -248,6 +252,12 @@ class AndroidMirror:
                 # 빠른 화면 캡처
                 frame = self._fast_screencap()
                 
+                # 실제 화면 캡처가 실패하면 재시도 (테스트 프레임 생성하지 않음)
+                if frame is None:
+                    # 캡처 실패 시 약간 대기 후 재시도
+                    time.sleep(0.05)
+                    frame = self._fast_screencap()
+                
                 if frame is not None:
                     self.last_capture_time = current_time
                     
@@ -269,26 +279,15 @@ class AndroidMirror:
                     if not self.frame_queue.full():
                         self.frame_queue.put(frame)
                 else:
-                    # 캡처 실패 시 테스트 프레임 사용
-                    frame = self._create_test_frame()
-                    if frame is not None:
-                        # frame_buffer와 last_frame 업데이트
-                        with self.frame_lock:
-                            self.last_frame = frame
-                        
-                        # 버퍼에 추가
-                        if self.frame_buffer.full():
-                            try:
-                                self.frame_buffer.get_nowait()
-                            except queue.Empty:
-                                pass
-                        self.frame_buffer.put(frame)
-                        
-                        if self.frame_callback:
-                            self.frame_callback(frame)
-                        
-                        if not self.frame_queue.full():
-                            self.frame_queue.put(frame)
+                    # 캡처 실패 시 로그만 남기고 계속 시도 (dummy 프레임 생성하지 않음)
+                    if hasattr(self, '_capture_fail_count'):
+                        self._capture_fail_count += 1
+                    else:
+                        self._capture_fail_count = 1
+                    
+                    # 10번 실패할 때마다 경고 로그
+                    if self._capture_fail_count % 10 == 0:
+                        print(f"화면 캡처 실패 (연속 {self._capture_fail_count}번) - adb 연결 확인 필요")
                 
                 time.sleep(0.016)  # 60 FPS 루프
                 
@@ -443,13 +442,33 @@ class AndroidMirror:
         try:
             # 버퍼에서 최신 프레임 가져오기
             if not self.frame_buffer.empty():
-                return self.frame_buffer.get_nowait()
+                frame = self.frame_buffer.get_nowait()
+                if frame is not None:
+                    return frame
             
             # 버퍼가 비어있으면 마지막 프레임 반환
             with self.frame_lock:
-                return self.last_frame
+                if self.last_frame is not None:
+                    return self.last_frame
+            
+            # 프레임이 없고 루프가 실행 중이면 실제 화면 캡처 시도
+            if self.is_running:
+                # 실제 화면 캡처 시도 (타임아웃 짧게)
+                frame = self._fast_screencap()
+                if frame is not None:
+                    # 캡처 성공 시 버퍼 업데이트
+                    with self.frame_lock:
+                        self.last_frame = frame
+                    if not self.frame_buffer.full():
+                        self.frame_buffer.put(frame)
+                    return frame
+                
+            return None
                 
         except queue.Empty:
+            return None
+        except Exception as e:
+            print(f"get_latest_frame_optimized 오류: {e}")
             return None
     
     def set_capture_mode(self, mode: str):
