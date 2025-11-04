@@ -18,7 +18,6 @@ from phone_mirroring.android_mirror import AndroidMirror
 from display_manager.ar_display import ARDisplayManager, LCDDisplayManager
 from utils.config import Config
 from utils.logger import Logger
-from utils.picamera2_manager import get_camera_manager, is_picamera2_available
 
 # AR-phone 내부 모듈 임포트
 from hand_tracking.gesture_detector import GestureDetector
@@ -145,6 +144,10 @@ class ARPhoneInterface:
             # 패턴 분석기 초기화 (옵션)
             if self.use_pattern_analysis and PATTERN_ANALYZER_AVAILABLE:
                 self._initialize_pattern_analyzer()
+            
+            # Android 미러링 초기화
+            if not self._initialize_phone_mirroring():
+                self.logger.warning("Android 미러링 초기화 실패 - 오프라인 모드로 계속 실행")
             
             self.is_initialized = True
             self.logger.info("초기화 완료")
@@ -1117,7 +1120,13 @@ class ARPhoneInterface:
                 phone_frame = self.phone_mirror.get_latest_frame_optimized()
                 if phone_frame is not None:
                     self.latest_phone_frame = phone_frame
-                    self.display_manager.update_phone_frame(phone_frame)
+                    if self.display_manager:
+                        self.display_manager.update_phone_frame(phone_frame)
+                elif self.display_manager and self.latest_phone_frame is None:
+                    # 프레임이 없으면 테스트 프레임 생성
+                    test_frame = self.phone_mirror._create_test_frame()
+                    if test_frame is not None:
+                        self.display_manager.update_phone_frame(test_frame)
                 
                 # 디스플레이 업데이트
                 time.sleep(0.016)  # 60 FPS

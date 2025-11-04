@@ -251,6 +251,18 @@ class AndroidMirror:
                 if frame is not None:
                     self.last_capture_time = current_time
                     
+                    # frame_buffer와 last_frame 업데이트 (get_latest_frame_optimized() 지원)
+                    with self.frame_lock:
+                        self.last_frame = frame
+                    
+                    # 버퍼에 추가 (큐가 가득 차면 오래된 프레임 제거)
+                    if self.frame_buffer.full():
+                        try:
+                            self.frame_buffer.get_nowait()
+                        except queue.Empty:
+                            pass
+                    self.frame_buffer.put(frame)
+                    
                     if self.frame_callback:
                         self.frame_callback(frame)
                     
@@ -260,6 +272,18 @@ class AndroidMirror:
                     # 캡처 실패 시 테스트 프레임 사용
                     frame = self._create_test_frame()
                     if frame is not None:
+                        # frame_buffer와 last_frame 업데이트
+                        with self.frame_lock:
+                            self.last_frame = frame
+                        
+                        # 버퍼에 추가
+                        if self.frame_buffer.full():
+                            try:
+                                self.frame_buffer.get_nowait()
+                            except queue.Empty:
+                                pass
+                        self.frame_buffer.put(frame)
+                        
                         if self.frame_callback:
                             self.frame_callback(frame)
                         
