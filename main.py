@@ -231,7 +231,7 @@ class ARPhoneInterface:
             display_mode = self.config.get('display_mode', 'pygame')
             
             if display_mode == 'lcd':
-                self.display_manager = LCDDisplayManager(dc_pin=25, rst_pin=27)
+                self.display_manager = LCDDisplayManager()
             else:
                 self.display_manager = ARDisplayManager(
                     self.config.get('screen_width', 800),
@@ -1175,7 +1175,7 @@ def main():
     parser.add_argument('--device-id', type=str, default=None,
                        help='Android 디바이스 ID')
     parser.add_argument('--display', type=str, choices=['lcd'],
-                       default='pygame', help='디스플레이 모드')
+                       default='lcd', help='디스플레이 모드')
     parser.add_argument('--camera-type', type=str, choices=['auto', 'picamera2', 'opencv'],
                        default='auto', help='카메라 타입')
     parser.add_argument('--debug', action='store_true',
