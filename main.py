@@ -184,16 +184,53 @@ class ARPhoneInterface:
             if config_dir:
                 config_dir = os.path.abspath(config_dir)
             
+            # session_id와 data_dir 가져오기 (scaler fit을 위해 - train_gesture 방식)
+            session_id = self.config.get('session_id', self.session_id)
+            # 데이터 디렉토리 경로 (AR-phone 내부 우선, 없으면 train_gesture 경로)
+            data_dir = self.config.get('data_dir', None)
+            if not data_dir:
+                # AR-phone 내부 데이터 디렉토리 우선 확인
+                from pathlib import Path
+                base_dir = Path(__file__).parent
+                ar_phone_data_dir = str(base_dir / "data" / "processed")
+                if os.path.exists(ar_phone_data_dir):
+                    data_dir = ar_phone_data_dir
+                else:
+                    # train_gesture 경로 시도
+                    train_gesture_data_dir = str(base_dir.parent / "train_gesture" / "train" / "data" / "processed")
+                    if os.path.exists(train_gesture_data_dir):
+                        data_dir = train_gesture_data_dir
+                    else:
+                        # 상대 경로로도 시도
+                        train_gesture_data_dir = str(base_dir.parent / "train_gesture" / "data" / "processed")
+                        if os.path.exists(train_gesture_data_dir):
+                            data_dir = train_gesture_data_dir
+                        else:
+                            data_dir = None
+            
             self.model, self.preprocessor_config = load_model_and_config(
                 model_path=self.model_path,
                 config_dir=config_dir,
                 sequence_length=self.sequence_length,
                 max_output_length=self.max_output_length,
                 time_window=self.time_window,
-                use_thumb_only=self.use_thumb_only
+                use_thumb_only=self.use_thumb_only,
+                session_id=session_id,
+                data_dir=data_dir
             )
             
             self.scaler = self.preprocessor_config.get('scaler')
+            
+            # scaler 상태 확인 및 로그
+            if self.scaler is not None:
+                if hasattr(self.scaler, 'mean_') and self.scaler.mean_ is not None:
+                    self.logger.info(f"  Scaler: FITTED (features will be normalized)")
+                else:
+                    self.logger.warning(f"  Scaler: NOT FITTED (features will NOT be normalized)")
+                    self.scaler = None
+            else:
+                self.logger.warning(f"  Scaler: NOT FOUND (features will NOT be normalized)")
+            
             self.use_thumb_only = self.preprocessor_config.get('use_thumb_only', self.use_thumb_only)
             self.sequence_length = self.preprocessor_config.get('sequence_length', self.sequence_length)
             self.label_encoders = {}  # label_encoders는 Multi-label 방식에서는 사용하지 않음
@@ -472,11 +509,21 @@ class ARPhoneInterface:
         # 정규화
         if self.scaler:
             try:
-                hand_features_scaled = self.scaler.transform([hand_features])[0]
+                # scaler가 fitted되었는지 확인
+                if hasattr(self.scaler, 'mean_') and self.scaler.mean_ is not None:
+                    hand_features_scaled = self.scaler.transform([hand_features])[0]
+                else:
+                    # scaler가 fitted되지 않은 경우 정규화 없이 사용
+                    if not hasattr(self, '_scaler_warned'):
+                        self.logger.warning("Scaler is not fitted. Using features without normalization.")
+                        self._scaler_warned = True
+                    hand_features_scaled = hand_features
             except Exception as e:
                 self.logger.error(f"Scaler transform failed: {e}")
+                self.logger.warning("Falling back to unnormalized features")
                 hand_features_scaled = hand_features
         else:
+            # scaler가 없는 경우 정규화 없이 사용
             hand_features_scaled = hand_features
         
         # 시퀀스 버퍼에 추가
