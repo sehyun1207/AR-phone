@@ -351,8 +351,11 @@ class WaveshareLCDManager:
             # 프레임을 LCD 해상도에 맞게 조정
             lcd_frame = cv2.resize(frame, (self.lcd_width, self.lcd_height))
             
-            # BGR을 RGB로 변환
-            rgb_frame = cv2.cvtColor(lcd_frame, cv2.COLOR_BGR2RGB)
+            # phone_mirror에서 오는 프레임은 이미 RGB로 변환되어 있으므로
+            # 여기서는 그대로 사용 (추가 변환 시 색 반전됨)
+            # 만약 BGR로 오는 경우를 대비해 확인 필요시 주석 해제
+            # rgb_frame = cv2.cvtColor(lcd_frame, cv2.COLOR_BGR2RGB)  # 필요시만 사용
+            rgb_frame = lcd_frame  # 이미 RGB이므로 그대로 사용
             
             # PIL Image로 변환하여 ILI9341에 표시
             from PIL import Image

@@ -110,6 +110,12 @@ class ARPhoneInterface:
         self.last_fps_time = time.time()
         self.current_fps = 0
         self.inference_count = 0
+        self.last_fps_update_time = time.time()
+        
+        # Debug 모드 (UI 표시용)
+        self.debug_mode = self.config.get('debug', False)
+        self.debug_frame = None
+        self.debug_frame_lock = threading.Lock()
         
     def initialize(self) -> bool:
         """시스템 초기화"""
@@ -372,6 +378,10 @@ class ARPhoneInterface:
             
             # MediaPipe로 hand tracking (train_gesture 방식)
             hands_data, processed_frame = self.gesture_detector.detect_hands(frame)
+            
+            # Debug 모드에서 UI 표시
+            if self.debug_mode:
+                self._update_debug_frame(processed_frame, hands_data)
             
             # Hand feature 추출
             hand_features = self._extract_hand_features(hands_data)
@@ -654,6 +664,26 @@ class ARPhoneInterface:
             
             # Android 제어 실행
             if self.android_controller and self.android_controller.is_connected:
+                # Android 이벤트 로그 출력 (run_realtime_system.py처럼)
+                coordinate_info = ""
+                if android_events:
+                    x_events = [e for e in android_events if e[1] == '0035']
+                    y_events = [e for e in android_events if e[1] == '0036']
+                    if x_events or y_events:
+                        x_val = int(x_events[0][2], 16) if x_events else None
+                        y_val = int(y_events[0][2], 16) if y_events else None
+                        coordinate_info = f", X={x_val}, Y={y_val}" if x_val is not None or y_val is not None else ""
+                
+                self.logger.info(f"🔮 Prediction #{self.inference_count}: {len(android_events)} events{coordinate_info}")
+                
+                # Android 이벤트 상세 로그 (DEBUG 레벨)
+                if self.logger.isEnabledFor(logging.DEBUG):
+                    for i, event in enumerate(android_events[:10]):  # 처음 10개만
+                        event_type, event_code, value_hex = event
+                        value_int = int(value_hex, 16)
+                        event_name = self._get_event_name(event_type, event_code)
+                        self.logger.debug(f"  [{i+1}] {event_name} (type={event_type}, code={event_code}), value={value_int} (0x{value_hex})")
+                
                 return self.android_controller.send_event_sequence(android_events, delay=0.001)
             
             return False
@@ -1114,6 +1144,11 @@ class ARPhoneInterface:
     
     def _main_loop(self):
         """메인 루프"""
+        # Debug 모드에서 UI 표시 스레드 시작
+        if self.debug_mode:
+            debug_thread = threading.Thread(target=self._debug_ui_loop, daemon=True)
+            debug_thread.start()
+        
         while self.is_running:
             try:
                 # 스마트폰 프레임 업데이트
@@ -1142,6 +1177,81 @@ class ARPhoneInterface:
         elif key == 102:  # F
             if self.display_manager:
                 self.display_manager.toggle_gesture_info()
+    
+    def _update_debug_frame(self, processed_frame: np.ndarray, hands_data: list):
+        """Debug 모드용 프레임 업데이트"""
+        try:
+            # FPS 계산
+            current_time = time.time()
+            self.fps_counter += 1
+            if current_time - self.last_fps_update_time >= 1.0:
+                self.current_fps = self.fps_counter / (current_time - self.last_fps_update_time)
+                self.fps_counter = 0
+                self.last_fps_update_time = current_time
+            
+            # 통계 정보 표시
+            display_text = [
+                f"FPS: {self.current_fps:.1f}" if self.current_fps > 0 else "FPS: --",
+                f"Inference: {self.inference_count}",
+                f"Buffer: {len(self.sequence_buffer)}/{self.sequence_length}",
+                f"Hands: {len(hands_data) if hands_data else 0}"
+            ]
+            
+            y_offset = 25
+            for i, text in enumerate(display_text):
+                cv2.putText(processed_frame, text,
+                          (10, y_offset + i * 25), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            
+            # Debug 프레임 업데이트
+            with self.debug_frame_lock:
+                self.debug_frame = processed_frame.copy()
+        except Exception as e:
+            self.logger.debug(f"Debug frame update error: {e}")
+    
+    def _debug_ui_loop(self):
+        """Debug UI 루프 (별도 스레드)"""
+        try:
+            while self.is_running:
+                with self.debug_frame_lock:
+                    frame = self.debug_frame.copy() if self.debug_frame is not None else None
+                
+                if frame is not None:
+                    cv2.imshow('AR Phone Interface - Debug', frame)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
+                        self.stop()
+                        break
+                else:
+                    time.sleep(0.033)  # 30 FPS
+        except Exception as e:
+            self.logger.error(f"Debug UI loop error: {e}")
+        finally:
+            cv2.destroyAllWindows()
+    
+    def _get_event_name(self, event_type: str, event_code: str) -> str:
+        """이벤트 이름 반환"""
+        try:
+            type_int = int(event_type, 16) if isinstance(event_type, str) else int(event_type)
+            code_int = int(event_code, 16) if isinstance(event_code, str) else int(event_code)
+            
+            if type_int == 0:
+                if code_int == 0:
+                    return "SYN_REPORT"
+            elif type_int == 1:
+                if code_int == 330 or code_int == 0x14a:
+                    return "BTN_TOUCH"
+            elif type_int == 3:
+                if code_int == 48 or code_int == 0x30:
+                    return "ABS_MT_TRACKING_ID"
+                elif code_int == 53 or code_int == 0x35:
+                    return "ABS_MT_X"
+                elif code_int == 54 or code_int == 0x36:
+                    return "ABS_MT_Y"
+            
+            return f"EVENT_{type_int}_{code_int}"
+        except:
+            return f"EVENT_{event_type}_{event_code}"
     
     def stop(self):
         """시스템 중지"""
