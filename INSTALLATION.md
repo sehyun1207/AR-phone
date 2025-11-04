@@ -1,7 +1,7 @@
 # AR Phone Interface 설치 가이드
 
 ## 📋 사전 준비사항
-
+   
 ### 하드웨어 체크리스트
 - [ ] 라즈베리파이 4 (4GB RAM 권장)
 - [ ] MicroSD 카드 (32GB 이상, Class 10)
