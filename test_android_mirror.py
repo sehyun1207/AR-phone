@@ -66,12 +66,9 @@ class AndroidMirrorTest:
     
     def _phone_frame_callback(self, frame):
         """스마트폰 프레임 콜백"""
-        try:
-            # LCD에 프레임 표시
-            if self.display_manager and self.display_manager.is_running:
-                self.display_manager.update_phone_frame(frame)
-        except Exception as e:
-            self.logger.error(f"프레임 콜백 오류: {e}")
+        # 콜백에서는 프레임을 저장만 하고, 메인 루프에서 표시
+        # 중복 업데이트를 방지하기 위해 콜백에서는 표시하지 않음
+        pass
     
     def run(self):
         """테스트 실행"""
@@ -92,27 +89,32 @@ class AndroidMirrorTest:
             last_fps_time = time.time()
             fps_counter = 0
             
+            # 프레임 업데이트 주기 제어 (깜빡거림 방지)
+            last_update_time = 0
+            update_interval = 1.0 / 15.0  # 15 FPS로 제한 (깜빡거림 방지)
+            
             while self.is_running:
-                # 스마트폰 프레임 가져오기
-                phone_frame = self.phone_mirror.get_latest_frame_optimized()
+                current_time = time.time()
                 
-                if phone_frame is not None:
-                    # LCD에 프레임 표시
-                    self.display_manager.update_phone_frame(phone_frame)
+                # 프레임 업데이트 주기 제한
+                if (current_time - last_update_time) >= update_interval:
+                    # 스마트폰 프레임 가져오기
+                    phone_frame = self.phone_mirror.get_latest_frame_optimized()
                     
-                    frame_count += 1
-                    fps_counter += 1
-                    
-                    # FPS 계산 (1초마다)
-                    current_time = time.time()
-                    if current_time - last_fps_time >= 1.0:
-                        fps = fps_counter / (current_time - last_fps_time)
-                        self.logger.info(f"FPS: {fps:.1f}, Total frames: {frame_count}")
-                        fps_counter = 0
-                        last_fps_time = current_time
-                else:
-                    # 프레임이 없으면 잠시 대기
-                    time.sleep(0.1)
+                    if phone_frame is not None:
+                        # LCD에 프레임 표시 (한 곳에서만 업데이트)
+                        self.display_manager.update_phone_frame(phone_frame)
+                        
+                        frame_count += 1
+                        fps_counter += 1
+                        last_update_time = current_time
+                        
+                        # FPS 계산 (1초마다)
+                        if current_time - last_fps_time >= 1.0:
+                            fps = fps_counter / (current_time - last_fps_time)
+                            self.logger.info(f"FPS: {fps:.1f}, Total frames: {frame_count}")
+                            fps_counter = 0
+                            last_fps_time = current_time
                 
                 # CPU 부하 감소를 위한 짧은 대기
                 time.sleep(0.016)  # 약 60 FPS 루프

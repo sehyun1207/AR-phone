@@ -1217,17 +1217,27 @@ class ARPhoneInterface:
             try:
                 loop_start = time.time()
                 
-                # 스마트폰 프레임 업데이트
+                # 스마트폰 프레임 업데이트 (깜빡거림 방지를 위해 주기 제한)
+                # 콜백에서 이미 latest_phone_frame을 업데이트하므로, 여기서는 표시만
+                loop_current_time = time.time()
+                if self.latest_phone_frame is not None and self.display_manager:
+                    # 프레임 업데이트 주기 제한 (15 FPS로 제한하여 깜빡거림 방지)
+                    if not hasattr(self, '_last_phone_frame_update_time'):
+                        self._last_phone_frame_update_time = 0
+                    
+                    phone_update_interval = 1.0 / 15.0  # 15 FPS
+                    if (loop_current_time - self._last_phone_frame_update_time) >= phone_update_interval:
+                        self.display_manager.update_phone_frame(self.latest_phone_frame)
+                        self._last_phone_frame_update_time = loop_current_time
+                
+                # 최신 프레임 가져오기 (콜백이 업데이트하지 않은 경우를 대비)
                 phone_frame = self.phone_mirror.get_latest_frame_optimized()
                 if phone_frame is not None:
                     self.latest_phone_frame = phone_frame
-                    if self.display_manager:
-                        self.display_manager.update_phone_frame(phone_frame)
-                # 프레임이 없으면 아무것도 표시하지 않음 (dummy 프레임 생성하지 않음)
                 
                 # 카메라 GUI 표시 (run_realtime_system.py처럼)
                 if self.show_camera_gui:
-                    current_time = time.time()
+                    current_time = loop_current_time
                     
                     # UI 표시 주기 제한 (30fps로 부드럽게)
                     if (current_time - self.last_camera_display_time) >= self.camera_display_interval:
@@ -1287,6 +1297,8 @@ class ARPhoneInterface:
     
     def _phone_frame_callback(self, frame: np.ndarray):
         """스마트폰 프레임 콜백"""
+        # 콜백에서는 프레임을 저장만 하고, 메인 루프에서 표시
+        # 중복 업데이트를 방지하기 위해 콜백에서는 표시하지 않음
         self.latest_phone_frame = frame
     
     def _key_callback(self, key):

@@ -438,18 +438,36 @@ class AndroidMirror:
         return None
     
     def get_latest_frame_optimized(self) -> Optional[np.ndarray]:
-        """최적화된 최신 프레임 가져오기"""
+        """최적화된 최신 프레임 가져오기 (프레임 소비하지 않음)"""
         try:
-            # 버퍼에서 최신 프레임 가져오기
-            if not self.frame_buffer.empty():
-                frame = self.frame_buffer.get_nowait()
-                if frame is not None:
-                    return frame
+            # 버퍼에서 최신 프레임 확인 (소비하지 않고 복사본 반환)
+            # 버퍼의 모든 프레임을 확인하여 가장 최신 프레임 찾기
+            latest_frame = None
+            temp_frames = []
             
-            # 버퍼가 비어있으면 마지막 프레임 반환
+            # 버퍼에서 모든 프레임을 임시로 꺼내서 최신 프레임 찾기
+            while not self.frame_buffer.empty():
+                try:
+                    frame = self.frame_buffer.get_nowait()
+                    temp_frames.append(frame)
+                    latest_frame = frame  # 마지막 프레임이 최신
+                except queue.Empty:
+                    break
+            
+            # 임시로 꺼낸 프레임들을 다시 버퍼에 넣기 (최신 프레임만 유지)
+            if temp_frames:
+                # 최신 프레임만 버퍼에 다시 넣기
+                if not self.frame_buffer.full():
+                    self.frame_buffer.put(latest_frame)
+            
+            # 버퍼에서 프레임을 찾았으면 반환
+            if latest_frame is not None:
+                return latest_frame.copy()  # 복사본 반환
+            
+            # 버퍼가 비어있으면 마지막 프레임 반환 (복사본)
             with self.frame_lock:
                 if self.last_frame is not None:
-                    return self.last_frame
+                    return self.last_frame.copy()  # 복사본 반환
             
             # 프레임이 없고 루프가 실행 중이면 실제 화면 캡처 시도
             if self.is_running:
@@ -461,14 +479,22 @@ class AndroidMirror:
                         self.last_frame = frame
                     if not self.frame_buffer.full():
                         self.frame_buffer.put(frame)
-                    return frame
+                    return frame.copy()  # 복사본 반환
                 
             return None
                 
         except queue.Empty:
+            # 버퍼가 비어있으면 마지막 프레임 반환
+            with self.frame_lock:
+                if self.last_frame is not None:
+                    return self.last_frame.copy()  # 복사본 반환
             return None
         except Exception as e:
             print(f"get_latest_frame_optimized 오류: {e}")
+            # 오류 발생 시 마지막 프레임 반환 시도
+            with self.frame_lock:
+                if self.last_frame is not None:
+                    return self.last_frame.copy()  # 복사본 반환
             return None
     
     def set_capture_mode(self, mode: str):

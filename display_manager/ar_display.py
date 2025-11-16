@@ -351,6 +351,9 @@ class WaveshareLCDManager:
             # 프레임을 LCD 해상도에 맞게 조정
             lcd_frame = cv2.resize(frame, (self.lcd_width, self.lcd_height))
             
+            # 상하 뒤집기 (화면이 뒤집혀 있는 문제 해결)
+            lcd_frame = cv2.flip(lcd_frame, 0)  # 0 = 상하 뒤집기
+            
             # phone_mirror에서 오는 프레임은 이미 RGB로 변환되어 있으므로
             # 여기서는 그대로 사용 (추가 변환 시 색 반전됨)
             # 만약 BGR로 오는 경우를 대비해 확인 필요시 주석 해제
