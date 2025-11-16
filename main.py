@@ -117,6 +117,13 @@ class ARPhoneInterface:
         self.debug_frame = None
         self.debug_frame_lock = threading.Lock()
         
+        # 카메라 GUI 표시 (run_realtime_system.py처럼)
+        self.show_camera_gui = self.config.get('show_camera_gui', True)
+        self.camera_display_frame = None
+        self.camera_display_lock = threading.Lock()
+        self.last_camera_display_time = 0
+        self.camera_display_interval = 1.0 / 30.0  # 30 FPS
+        
     def initialize(self) -> bool:
         """시스템 초기화"""
         try:
@@ -415,6 +422,11 @@ class ARPhoneInterface:
             
             # MediaPipe로 hand tracking (train_gesture 방식)
             hands_data, processed_frame = self.gesture_detector.detect_hands(frame)
+            
+            # 카메라 GUI 표시용 프레임 업데이트
+            if self.show_camera_gui and processed_frame is not None:
+                with self.camera_display_lock:
+                    self.camera_display_frame = processed_frame.copy()
             
             # Debug 모드에서 UI 표시
             if self.debug_mode:
@@ -1196,8 +1208,15 @@ class ARPhoneInterface:
             debug_thread = threading.Thread(target=self._debug_ui_loop, daemon=True)
             debug_thread.start()
         
+        # 카메라 GUI 표시용 변수
+        last_fps_time = time.time()
+        fps_frame_count = 0
+        target_fps = 30
+        
         while self.is_running:
             try:
+                loop_start = time.time()
+                
                 # 스마트폰 프레임 업데이트
                 phone_frame = self.phone_mirror.get_latest_frame_optimized()
                 if phone_frame is not None:
@@ -1206,8 +1225,61 @@ class ARPhoneInterface:
                         self.display_manager.update_phone_frame(phone_frame)
                 # 프레임이 없으면 아무것도 표시하지 않음 (dummy 프레임 생성하지 않음)
                 
+                # 카메라 GUI 표시 (run_realtime_system.py처럼)
+                if self.show_camera_gui:
+                    current_time = time.time()
+                    
+                    # UI 표시 주기 제한 (30fps로 부드럽게)
+                    if (current_time - self.last_camera_display_time) >= self.camera_display_interval:
+                        with self.camera_display_lock:
+                            display_frame = self.camera_display_frame
+                        
+                        if display_frame is not None:
+                            # 텍스트를 그리기 위해 프레임 복사 (원본 보호)
+                            display_frame_copy = display_frame.copy()
+                            
+                            # FPS 계산 (1초마다 업데이트)
+                            fps_elapsed = current_time - last_fps_time
+                            if fps_elapsed >= 1.0:
+                                actual_fps = fps_frame_count / fps_elapsed if fps_elapsed > 0 else 0
+                                fps_frame_count = 0
+                                last_fps_time = current_time
+                            else:
+                                # 아직 1초가 지나지 않았으면 이전 FPS 값 유지 (초기값은 0)
+                                actual_fps = fps_frame_count / fps_elapsed if fps_elapsed > 0 else 0
+                            
+                            # 통계 정보 표시
+                            display_text = [
+                                f"FPS: {actual_fps:.1f}" if actual_fps > 0 else "FPS: --",
+                                f"Inference: {self.inference_count}",
+                                f"Buffer: {len(self.sequence_buffer)}/{self.sequence_length}",
+                                f"Press 'q' to quit"
+                            ]
+                            
+                            y_offset = 25
+                            for i, text in enumerate(display_text):
+                                cv2.putText(display_frame_copy, text,
+                                          (10, y_offset + i * 25), 
+                                          cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                            
+                            cv2.imshow('AR Phone Interface - Camera', display_frame_copy)
+                            self.last_camera_display_time = current_time
+                            fps_frame_count += 1
+                    
+                    # waitKey는 1ms만 대기 (비블로킹)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
+                        self.stop()
+                        break
+                
                 # 디스플레이 업데이트
-                time.sleep(0.016)  # 60 FPS
+                # FPS 제한: 너무 빠르게 실행되면 CPU 사용량 증가
+                loop_time = time.time() - loop_start
+                target_loop_time = 1.0 / target_fps
+                if loop_time < target_loop_time:
+                    sleep_time = target_loop_time - loop_time
+                    if sleep_time > 0.001:
+                        time.sleep(sleep_time)
                 
             except Exception as e:
                 self.logger.error(f"메인 루프 오류: {e}")
@@ -1305,6 +1377,10 @@ class ARPhoneInterface:
         self.logger.info("AR Phone Interface 중지...")
         self.is_running = False
         
+        # 카메라 GUI 정리
+        if self.show_camera_gui:
+            cv2.destroyAllWindows()
+        
         # 카메라 정리
         if self.camera_manager:
             self.camera_manager.cleanup()
@@ -1350,8 +1426,15 @@ def main():
                        help='엄지 관절만 사용')
     parser.add_argument('--use-pattern-analysis', action='store_true', default=True,
                        help='패턴 분석 사용 (DTW + Cosine Similarity)')
+    parser.add_argument('--show-camera-gui', action='store_true', default=True,
+                       help='카메라 화면 GUI 표시 (run_realtime_system.py처럼)')
+    parser.add_argument('--no-camera-gui', action='store_true',
+                       help='카메라 GUI 표시 비활성화')
     
     args = parser.parse_args()
+    
+    # 카메라 GUI 표시 설정
+    show_camera_gui = args.show_camera_gui and not args.no_camera_gui
     
     # 설정 로드
     config = Config(args.config)
@@ -1364,6 +1447,7 @@ def main():
     config.set('session_id', args.session_id)
     config.set('use_thumb_only', args.use_thumb_only)
     config.set('use_pattern_analysis', args.use_pattern_analysis)
+    config.set('show_camera_gui', show_camera_gui)
     
     # 로거 설정
     logger = Logger("Main")
