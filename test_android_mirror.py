@@ -89,9 +89,9 @@ class AndroidMirrorTest:
             last_fps_time = time.time()
             fps_counter = 0
             
-            # 프레임 업데이트 주기 제어 (깜빡거림 방지)
+            # 프레임 업데이트 주기 제어 (깜빡거림 방지, 속도 개선)
             last_update_time = 0
-            update_interval = 1.0 / 15.0  # 15 FPS로 제한 (깜빡거림 방지)
+            update_interval = 1.0 / 25.0  # 25 FPS로 증가 (15 -> 25, 깜빡거림 방지하면서 더 빠르게)
             
             while self.is_running:
                 current_time = time.time()

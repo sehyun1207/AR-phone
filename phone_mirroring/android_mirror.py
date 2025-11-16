@@ -22,13 +22,13 @@ class AndroidMirror:
         
         # 성능 최적화 설정
         self.capture_thread = None
-        self.frame_buffer = queue.Queue(maxsize=3)  # 작은 버퍼로 메모리 절약
+        self.frame_buffer = queue.Queue(maxsize=5)  # 버퍼 크기 증가 (3 -> 5, 홈화면 등 모든 화면 보장)
         self.last_frame = None
         self.frame_lock = threading.Lock()
         
         # 캡처 설정
         self.capture_mode = "optimized"  # "fast", "optimized", "quality"
-        self.target_fps = 15  # 목표 FPS
+        self.target_fps = 25  # 목표 FPS (15 -> 25로 증가)
         self.quality_level = 0.8  # 품질 레벨 (0.1 ~ 1.0)
         
     def start_mirroring(self, callback: Optional[Callable] = None) -> bool:
@@ -99,9 +99,9 @@ class AndroidMirror:
             
             # 성능 최적화 설정
             self.frame_skip_counter = 0
-            self.frame_skip_interval = 2  # 2프레임마다 1번 캡처 (15 FPS)
+            self.frame_skip_interval = 1  # 매 프레임 캡처 (2 -> 1로 변경하여 더 빠르게)
             self.last_capture_time = 0
-            self.min_capture_interval = 0.067  # 최소 15 FPS (66ms 간격)
+            self.min_capture_interval = 0.04  # 최소 25 FPS (40ms 간격, 0.067 -> 0.04로 감소)
             
             # scrcpy 스트림 방식 시도
             if self._try_scrcpy_stream():
@@ -252,11 +252,15 @@ class AndroidMirror:
                 # 빠른 화면 캡처
                 frame = self._fast_screencap()
                 
-                # 실제 화면 캡처가 실패하면 재시도 (테스트 프레임 생성하지 않음)
+                # 실제 화면 캡처가 실패하면 재시도 (홈화면 등 모든 화면 캡처 보장)
                 if frame is None:
-                    # 캡처 실패 시 약간 대기 후 재시도
-                    time.sleep(0.05)
-                    frame = self._fast_screencap()
+                    # 캡처 실패 시 약간 대기 후 재시도 (최대 3번)
+                    retry_count = 0
+                    max_retries = 3
+                    while frame is None and retry_count < max_retries:
+                        time.sleep(0.03)  # 0.05 -> 0.03으로 감소하여 더 빠르게
+                        frame = self._fast_screencap()
+                        retry_count += 1
                 
                 if frame is not None:
                     self.last_capture_time = current_time
@@ -279,15 +283,15 @@ class AndroidMirror:
                     if not self.frame_queue.full():
                         self.frame_queue.put(frame)
                 else:
-                    # 캡처 실패 시 로그만 남기고 계속 시도 (dummy 프레임 생성하지 않음)
+                    # 캡처 실패 시 로그만 남기고 계속 시도 (홈화면 등 모든 화면 캡처 보장)
                     if hasattr(self, '_capture_fail_count'):
                         self._capture_fail_count += 1
                     else:
                         self._capture_fail_count = 1
                     
-                    # 10번 실패할 때마다 경고 로그
+                    # 10번 실패할 때마다 경고 로그 (홈화면 포함 모든 화면 캡처 시도)
                     if self._capture_fail_count % 10 == 0:
-                        print(f"화면 캡처 실패 (연속 {self._capture_fail_count}번) - adb 연결 확인 필요")
+                        print(f"화면 캡처 실패 (연속 {self._capture_fail_count}번) - adb 연결 확인 필요 (홈화면 포함 모든 화면 캡처 시도 중)")
                 
                 time.sleep(0.016)  # 60 FPS 루프
                 
@@ -307,8 +311,8 @@ class AndroidMirror:
                 cmd.extend(["-s", self.device_id])
             cmd.extend(["exec-out", "screencap", "-p"])
             
-            # 타임아웃을 짧게 설정
-            result = subprocess.run(cmd, capture_output=True, timeout=1)
+            # 타임아웃 증가 (홈화면 등 모든 화면 캡처 보장)
+            result = subprocess.run(cmd, capture_output=True, timeout=2)  # 1초 -> 2초로 증가
             
             if result.returncode == 0 and result.stdout:
                 # PNG 데이터를 numpy 배열로 변환
@@ -469,9 +473,9 @@ class AndroidMirror:
                 if self.last_frame is not None:
                     return self.last_frame.copy()  # 복사본 반환
             
-            # 프레임이 없고 루프가 실행 중이면 실제 화면 캡처 시도
+            # 프레임이 없고 루프가 실행 중이면 실제 화면 캡처 시도 (홈화면 포함 모든 화면)
             if self.is_running:
-                # 실제 화면 캡처 시도 (타임아웃 짧게)
+                # 실제 화면 캡처 시도 (홈화면 등 모든 화면 캡처 보장)
                 frame = self._fast_screencap()
                 if frame is not None:
                     # 캡처 성공 시 버퍼 업데이트
