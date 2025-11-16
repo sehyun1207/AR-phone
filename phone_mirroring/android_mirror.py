@@ -101,7 +101,15 @@ class AndroidMirror:
             self.frame_skip_counter = 0
             self.frame_skip_interval = 1  # 매 프레임 캡처 (스킵 없음)
             self.last_capture_time = 0
-            self.min_capture_interval = 0.033  # 최소 30 FPS (33ms 간격, 더 자연스러운 화면)
+            
+            # TCP 연결 여부에 따라 캡처 간격 조정
+            is_tcp = self._is_tcp_connection()
+            if is_tcp:
+                # TCP 연결은 더 느리므로 캡처 간격 증가
+                self.min_capture_interval = 0.05  # 20 FPS (TCP 연결)
+            else:
+                # USB 연결은 빠르게
+                self.min_capture_interval = 0.033  # 30 FPS (USB 연결)
             
             # scrcpy 스트림 방식 시도
             if self._try_scrcpy_stream():
@@ -249,13 +257,16 @@ class AndroidMirror:
                 # 빠른 화면 캡처
                 frame = self._fast_screencap()
                 
-                # 실제 화면 캡처가 실패하면 재시도 (홈화면 등 모든 화면 캡처 보장)
+                # 실제 화면 캡처가 실패하면 재시도 (TCP 연결 지원)
                 if frame is None:
-                    # 캡처 실패 시 빠른 재시도 (최대 2번, 더 빠른 응답)
+                    # TCP 연결은 더 느리므로 재시도 횟수와 대기 시간 조정
+                    is_tcp = self._is_tcp_connection()
+                    max_retries = 3 if is_tcp else 2  # TCP는 더 많은 재시도
+                    retry_delay = 0.05 if is_tcp else 0.02  # TCP는 더 긴 대기
+                    
                     retry_count = 0
-                    max_retries = 2  # 3 -> 2로 감소하여 더 빠른 실패 처리
                     while frame is None and retry_count < max_retries:
-                        time.sleep(0.02)  # 0.03 -> 0.02로 감소하여 더 빠르게
+                        time.sleep(retry_delay)
                         frame = self._fast_screencap()
                         retry_count += 1
                 
@@ -300,20 +311,25 @@ class AndroidMirror:
             print(f"최적화된 screencap 루프 오류: {e}")
     
     def _fast_screencap(self) -> Optional[np.ndarray]:
-        """빠른 화면 캡처 (최적화된 버전)"""
+        """빠른 화면 캡처 (TCP 연결 지원)"""
         try:
             import subprocess
             import cv2
             import numpy as np
             
-            # 방법 1: 낮은 해상도로 캡처 후 업스케일링
+            # TCP 연결 여부 확인
+            is_tcp = self._is_tcp_connection()
+            
+            # 방법 1: exec-out 사용 (USB와 TCP 모두 지원)
             cmd = ["adb"]
             if self.device_id:
                 cmd.extend(["-s", self.device_id])
             cmd.extend(["exec-out", "screencap", "-p"])
             
-            # 타임아웃 최적화 (빠른 응답과 안정성 균형)
-            result = subprocess.run(cmd, capture_output=True, timeout=1.5)  # 2초 -> 1.5초로 최적화
+            # TCP 연결은 더 느리므로 타임아웃 증가
+            timeout = 3.0 if is_tcp else 1.5
+            
+            result = subprocess.run(cmd, capture_output=True, timeout=timeout)
             
             if result.returncode == 0 and result.stdout:
                 # PNG 데이터를 numpy 배열로 변환
@@ -334,9 +350,44 @@ class AndroidMirror:
                     # BGR을 RGB로 변환
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     return frame
+            
+            # exec-out 실패 시 shell 명령어로 재시도 (TCP 연결에서 더 안정적일 수 있음)
+            if is_tcp:
+                try:
+                    cmd_shell = ["adb"]
+                    if self.device_id:
+                        cmd_shell.extend(["-s", self.device_id])
+                    cmd_shell.extend(["shell", "screencap", "-p"])
+                    
+                    result_shell = subprocess.run(cmd_shell, capture_output=True, timeout=timeout)
+                    
+                    if result_shell.returncode == 0 and result_shell.stdout:
+                        # PNG 데이터를 numpy 배열로 변환
+                        nparr = np.frombuffer(result_shell.stdout, np.uint8)
+                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        
+                        if frame is not None:
+                            # 해상도 최적화
+                            height, width = frame.shape[:2]
+                            if width > 800 or height > 600:
+                                scale = min(800/width, 600/height)
+                                new_width = int(width * scale)
+                                new_height = int(height * scale)
+                                frame = cv2.resize(frame, (new_width, new_height))
+                            
+                            # BGR을 RGB로 변환
+                            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                            return frame
+                except Exception as e:
+                    # shell 방식도 실패하면 exec-out 결과 사용
+                    pass
                     
         except subprocess.TimeoutExpired:
-            pass  # 타임아웃은 무시하고 다음 프레임으로
+            # TCP 연결에서 타임아웃이 더 자주 발생할 수 있음
+            if self._is_tcp_connection():
+                pass  # TCP 타임아웃은 정상적으로 처리
+            else:
+                pass  # USB 타임아웃도 무시
         except Exception as e:
             print(f"빠른 화면 캡처 오류: {e}")
             
@@ -684,12 +735,44 @@ class AndroidMirror:
     def is_connected(self) -> bool:
         """디바이스 연결 상태 확인"""
         try:
+            cmd = ["adb", "devices"]
             result = subprocess.run(
-                "adb devices",
-                shell=True,
+                cmd,
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=5
             )
-            return "device" in result.stdout
-        except:
+            if result.returncode == 0:
+                # USB 또는 TCP 연결된 디바이스 확인
+                output = result.stdout
+                if self.device_id:
+                    # 특정 디바이스 ID 확인
+                    return self.device_id in output and "device" in output
+                else:
+                    # 모든 연결된 디바이스 확인
+                    return "device" in output
             return False
+        except Exception as e:
+            print(f"디바이스 연결 확인 오류: {e}")
+            return False
+    
+    def _is_tcp_connection(self) -> bool:
+        """TCP 연결 여부 확인 (IP:PORT 형식)"""
+        if not self.device_id:
+            # device_id가 없으면 adb devices로 확인
+            try:
+                cmd = ["adb", "devices"]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    # IP:PORT 형식이 있으면 TCP 연결
+                    import re
+                    tcp_pattern = r'\d+\.\d+\.\d+\.\d+:\d+'
+                    return bool(re.search(tcp_pattern, result.stdout))
+            except:
+                pass
+            return False
+        else:
+            # device_id가 IP:PORT 형식인지 확인
+            import re
+            tcp_pattern = r'^\d+\.\d+\.\d+\.\d+:\d+$'
+            return bool(re.match(tcp_pattern, self.device_id))
