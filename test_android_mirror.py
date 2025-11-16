@@ -89,14 +89,14 @@ class AndroidMirrorTest:
             last_fps_time = time.time()
             fps_counter = 0
             
-            # 프레임 업데이트 주기 제어 (깜빡거림 방지, 속도 개선)
+            # 프레임 업데이트 주기 제어 (더 빠르고 자연스러운 화면)
             last_update_time = 0
-            update_interval = 1.0 / 25.0  # 25 FPS로 증가 (15 -> 25, 깜빡거림 방지하면서 더 빠르게)
+            update_interval = 1.0 / 30.0  # 30 FPS로 증가 (25 -> 30, 더 자연스러운 화면)
             
             while self.is_running:
                 current_time = time.time()
                 
-                # 프레임 업데이트 주기 제한
+                # 프레임 업데이트 주기 제한 (더 빠른 업데이트)
                 if (current_time - last_update_time) >= update_interval:
                     # 스마트폰 프레임 가져오기
                     phone_frame = self.phone_mirror.get_latest_frame_optimized()
@@ -116,8 +116,13 @@ class AndroidMirrorTest:
                             fps_counter = 0
                             last_fps_time = current_time
                 
-                # CPU 부하 감소를 위한 짧은 대기
-                time.sleep(0.016)  # 약 60 FPS 루프
+                # 동적 sleep으로 더 자연스러운 프레임 처리
+                elapsed = time.time() - current_time
+                target_loop_time = update_interval
+                if elapsed < target_loop_time:
+                    sleep_time = target_loop_time - elapsed
+                    if sleep_time > 0.001:  # 1ms 이상일 때만 대기
+                        time.sleep(sleep_time)
                 
         except KeyboardInterrupt:
             self.logger.info("사용자에 의해 중단됨")

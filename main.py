@@ -1225,7 +1225,7 @@ class ARPhoneInterface:
                     if not hasattr(self, '_last_phone_frame_update_time'):
                         self._last_phone_frame_update_time = 0
                     
-                    phone_update_interval = 1.0 / 25.0  # 25 FPS로 증가 (15 -> 25, 더 빠른 업데이트)
+                    phone_update_interval = 1.0 / 30.0  # 30 FPS로 증가 (25 -> 30, 더 빠르고 자연스러운 업데이트)
                     if (loop_current_time - self._last_phone_frame_update_time) >= phone_update_interval:
                         self.display_manager.update_phone_frame(self.latest_phone_frame)
                         self._last_phone_frame_update_time = loop_current_time

@@ -28,7 +28,7 @@ class AndroidMirror:
         
         # 캡처 설정
         self.capture_mode = "optimized"  # "fast", "optimized", "quality"
-        self.target_fps = 25  # 목표 FPS (15 -> 25로 증가)
+        self.target_fps = 30  # 목표 FPS (25 -> 30로 증가, 더 자연스러운 화면)
         self.quality_level = 0.8  # 품질 레벨 (0.1 ~ 1.0)
         
     def start_mirroring(self, callback: Optional[Callable] = None) -> bool:
@@ -97,11 +97,11 @@ class AndroidMirror:
         try:
             print("Android 미러링 루프 시작 (최적화 버전)")
             
-            # 성능 최적화 설정
+            # 성능 최적화 설정 (더 빠르고 자연스러운 화면 송출)
             self.frame_skip_counter = 0
-            self.frame_skip_interval = 1  # 매 프레임 캡처 (2 -> 1로 변경하여 더 빠르게)
+            self.frame_skip_interval = 1  # 매 프레임 캡처 (스킵 없음)
             self.last_capture_time = 0
-            self.min_capture_interval = 0.04  # 최소 25 FPS (40ms 간격, 0.067 -> 0.04로 감소)
+            self.min_capture_interval = 0.033  # 최소 30 FPS (33ms 간격, 더 자연스러운 화면)
             
             # scrcpy 스트림 방식 시도
             if self._try_scrcpy_stream():
@@ -238,15 +238,12 @@ class AndroidMirror:
             while self.is_running:
                 current_time = time.time()
                 
-                # 프레임 스킵핑으로 성능 향상
-                self.frame_skip_counter += 1
-                if self.frame_skip_counter % self.frame_skip_interval != 0:
-                    time.sleep(0.016)  # 60 FPS로 루프 실행
-                    continue
-                
-                # 최소 캡처 간격 확인
+                # 최소 캡처 간격 확인 (프레임 스킵 제거하여 더 자연스럽게)
                 if current_time - self.last_capture_time < self.min_capture_interval:
-                    time.sleep(0.016)
+                    # 간격이 짧으면 짧은 대기 (불필요한 긴 대기 제거)
+                    sleep_time = self.min_capture_interval - (current_time - self.last_capture_time)
+                    if sleep_time > 0.001:  # 1ms 이상일 때만 대기
+                        time.sleep(sleep_time)
                     continue
                 
                 # 빠른 화면 캡처
@@ -254,11 +251,11 @@ class AndroidMirror:
                 
                 # 실제 화면 캡처가 실패하면 재시도 (홈화면 등 모든 화면 캡처 보장)
                 if frame is None:
-                    # 캡처 실패 시 약간 대기 후 재시도 (최대 3번)
+                    # 캡처 실패 시 빠른 재시도 (최대 2번, 더 빠른 응답)
                     retry_count = 0
-                    max_retries = 3
+                    max_retries = 2  # 3 -> 2로 감소하여 더 빠른 실패 처리
                     while frame is None and retry_count < max_retries:
-                        time.sleep(0.03)  # 0.05 -> 0.03으로 감소하여 더 빠르게
+                        time.sleep(0.02)  # 0.03 -> 0.02로 감소하여 더 빠르게
                         frame = self._fast_screencap()
                         retry_count += 1
                 
@@ -293,7 +290,11 @@ class AndroidMirror:
                     if self._capture_fail_count % 10 == 0:
                         print(f"화면 캡처 실패 (연속 {self._capture_fail_count}번) - adb 연결 확인 필요 (홈화면 포함 모든 화면 캡처 시도 중)")
                 
-                time.sleep(0.016)  # 60 FPS 루프
+                # 동적 sleep으로 더 자연스러운 프레임 처리
+                elapsed = time.time() - current_time
+                target_loop_time = self.min_capture_interval
+                if elapsed < target_loop_time:
+                    time.sleep(target_loop_time - elapsed)
                 
         except Exception as e:
             print(f"최적화된 screencap 루프 오류: {e}")
@@ -311,8 +312,8 @@ class AndroidMirror:
                 cmd.extend(["-s", self.device_id])
             cmd.extend(["exec-out", "screencap", "-p"])
             
-            # 타임아웃 증가 (홈화면 등 모든 화면 캡처 보장)
-            result = subprocess.run(cmd, capture_output=True, timeout=2)  # 1초 -> 2초로 증가
+            # 타임아웃 최적화 (빠른 응답과 안정성 균형)
+            result = subprocess.run(cmd, capture_output=True, timeout=1.5)  # 2초 -> 1.5초로 최적화
             
             if result.returncode == 0 and result.stdout:
                 # PNG 데이터를 numpy 배열로 변환

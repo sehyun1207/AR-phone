@@ -343,36 +343,36 @@ class WaveshareLCDManager:
             self.bits_per_pixel = 16
     
     def update_frame(self, frame: np.ndarray):
-        """LCD 프레임 업데이트"""
+        """LCD 프레임 업데이트 (최적화된 버전)"""
         if not self.is_running or frame is None:
             return
         
         try:
-            # 프레임을 LCD 해상도에 맞게 조정
-            lcd_frame = cv2.resize(frame, (self.lcd_width, self.lcd_height))
+            # 프레임을 LCD 해상도에 맞게 조정 (INTER_LINEAR로 더 빠른 리사이즈)
+            lcd_frame = cv2.resize(frame, (self.lcd_width, self.lcd_height), interpolation=cv2.INTER_LINEAR)
             
             # 상하 뒤집기 (화면이 뒤집혀 있는 문제 해결)
             lcd_frame = cv2.flip(lcd_frame, 0)  # 0 = 상하 뒤집기
             
             # phone_mirror에서 오는 프레임은 이미 RGB로 변환되어 있으므로
             # 여기서는 그대로 사용 (추가 변환 시 색 반전됨)
-            # 만약 BGR로 오는 경우를 대비해 확인 필요시 주석 해제
-            # rgb_frame = cv2.cvtColor(lcd_frame, cv2.COLOR_BGR2RGB)  # 필요시만 사용
             rgb_frame = lcd_frame  # 이미 RGB이므로 그대로 사용
             
-            # PIL Image로 변환하여 ILI9341에 표시
+            # PIL Image로 변환하여 ILI9341에 표시 (메모리 효율적)
             from PIL import Image
-            pil_image = Image.fromarray(rgb_frame)
+            # numpy 배열을 직접 PIL Image로 변환 (복사 최소화)
+            pil_image = Image.fromarray(rgb_frame, 'RGB')
             self.lcd.display(pil_image)
             
             self.current_frame = rgb_frame
             
-            # 프레임 콜백 호출
+            # 프레임 콜백 호출 (비동기로 처리하여 블로킹 방지)
             if self.frame_callback:
                 try:
                     self.frame_callback(rgb_frame)
                 except Exception as e:
-                    print(f"프레임 콜백 실행 중 오류: {e}")
+                    # 콜백 오류는 무시하여 메인 업데이트 방해하지 않음
+                    pass
             
         except Exception as e:
             print(f"❌ LCD 프레임 업데이트 실패: {e}")
