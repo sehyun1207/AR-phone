@@ -769,7 +769,12 @@ class ARPhoneInterface:
             self.logger.error(f"카메라 프레임 콜백 오류: {e}")
     
     def _extract_hand_features(self, hands_data: list) -> Optional[np.ndarray]:
-        """Hand 랜드마크에서 feature 추출 (train_gesture 방식)"""
+        """Hand 랜드마크에서 feature 추출 (train_gesture/data_preprocessing.py와 동일)
+        
+        train_gesture의 extract_hand_features와 동일하게:
+        - use_thumb_only=True일 때: 12개 feature (손목 제외, 4개 관절만: CMC, MCP, IP, Tip)
+        - 손목은 상대 좌표 변환에만 사용하고 feature에서는 제외
+        """
         if not hands_data or len(hands_data) == 0:
             return None
         
@@ -780,12 +785,12 @@ class ARPhoneInterface:
         WRIST_INDEX = 0
         
         if self.use_thumb_only:
-            min_landmarks = 5
-            feature_count = 15  # 5 joints * 3 coords
-            thumb_indices = [0, 1, 2, 3, 4]
+            min_landmarks = 5  # 손목 포함하여 상대 좌표 변환에 필요
+            feature_count = 12  # 4 joints * 3 coords (손목 제외)
+            thumb_indices_no_wrist = [1, 2, 3, 4]  # 손목 제외
         else:
             min_landmarks = 21
-            feature_count = 63  # 21 joints * 3 coords
+            feature_count = 60  # 20 joints * 3 coords (손목 제외)
         
         if not landmarks or len(landmarks) < min_landmarks:
             return None
@@ -796,30 +801,26 @@ class ARPhoneInterface:
         wrist_y = wrist.get('y', 0.0)
         wrist_z = wrist.get('z', 0.0)
         
-        # 랜드마크를 feature 벡터로 변환 (손목 기준 상대 좌표)
+        # 랜드마크를 feature 벡터로 변환 (손목 기준 상대 좌표, 손목 제외)
         features = []
         if self.use_thumb_only:
-            for joint_idx, idx in enumerate(thumb_indices):
+            # 손목 제외, 4개 관절만 (CMC, MCP, IP, Tip)
+            for idx in thumb_indices_no_wrist:
                 if idx < len(landmarks):
                     landmark = landmarks[idx]
-                    if joint_idx == 0:  # 손목
-                        features.extend([0.0, 0.0, 0.0])
-                    else:
-                        features.append(landmark.get('x', 0.0) - wrist_x)
-                        features.append(landmark.get('y', 0.0) - wrist_y)
-                        features.append(landmark.get('z', 0.0) - wrist_z)
+                    features.append(landmark.get('x', 0.0) - wrist_x)
+                    features.append(landmark.get('y', 0.0) - wrist_y)
+                    features.append(landmark.get('z', 0.0) - wrist_z)
                 else:
                     features.extend([0.0, 0.0, 0.0])
         else:
-            for idx in range(21):
+            # 손목 제외, 20개 관절
+            for idx in range(1, 21):  # 손목(0) 제외
                 if idx < len(landmarks):
                     landmark = landmarks[idx]
-                    if idx == WRIST_INDEX:
-                        features.extend([0.0, 0.0, 0.0])
-                    else:
-                        features.append(landmark.get('x', 0.0) - wrist_x)
-                        features.append(landmark.get('y', 0.0) - wrist_y)
-                        features.append(landmark.get('z', 0.0) - wrist_z)
+                    features.append(landmark.get('x', 0.0) - wrist_x)
+                    features.append(landmark.get('y', 0.0) - wrist_y)
+                    features.append(landmark.get('z', 0.0) - wrist_z)
                 else:
                     features.extend([0.0, 0.0, 0.0])
         
