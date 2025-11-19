@@ -297,7 +297,23 @@ class ARPhoneInterface:
                 # 사용자가 지정한 모델 경로 사용
                 if not os.path.exists(self.model_path):
                     self.logger.error(f"모델 파일을 찾을 수 없습니다: {self.model_path}")
-                return False
+                    return False
+                
+                # 사용자 지정 모델의 경우 preprocessor_config 초기화
+                if not hasattr(self, 'preprocessor_config') or not self.preprocessor_config:
+                    self.preprocessor_config = {
+                        'sequence_length': 1,
+                        'time_window': 0.2,
+                        'max_output_length': 1,
+                        'use_thumb_only': True,
+                        'target_transform': {'type': None},
+                        'scaler': None,
+                        'hand_features': [],
+                        'type_code_pairs': [],
+                        'type_vocab': {},
+                        'code_vocab': {},
+                        'label_threshold': 0.5
+                    }
             
             if not os.path.exists(self.model_path):
                 self.logger.error(f"모델 파일을 찾을 수 없습니다: {self.model_path}")
@@ -2130,7 +2146,7 @@ def main():
                        default='auto', help='카메라 타입')
     parser.add_argument('--debug', action='store_true',
                        help='디버그 모드')
-    parser.add_argument('--model-path', type=str, default="/home/sehyun/ar_phone/models/random_forest_coordinate_20251117_091207.pkl",
+    parser.add_argument('--model-path', type=str, default=None,
                        help='모델 파일 경로 (지정하지 않으면 최고 성능 모델 자동 선택)')
     parser.add_argument('--session-id', type=str, default='optimized_session_20251102',
                        help='세션 ID')
@@ -2155,7 +2171,8 @@ def main():
     config.set('display_mode', args.display)
     config.set('camera_type', args.camera_type)
     config.set('debug', args.debug)
-    config.set('model_path', args.model_path)
+    # model_path가 None이면 고정 모델 사용, 아니면 사용자 지정 경로 사용
+    config.set('model_path', args.model_path if args.model_path else None)
     config.set('session_id', args.session_id)
     # use_thumb_only는 항상 True로 고정
     config.set('use_thumb_only', True)
