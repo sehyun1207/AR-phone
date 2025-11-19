@@ -68,19 +68,22 @@ def load_model_config(model_path: str, config_dir: Optional[str] = None) -> Dict
             except Exception as e:
                 logger.warning(f"Failed to load config from {config_path}: {e}")
     
-    # Pickle 파일 로드 시도 (scaler 등)
-    # train_gesture에서는 scaler가 pickle 파일로 저장될 수 있음
+    # Scaler 파일 로드 시도 (모델명_scaler.pkl 형식)
+    # 예: random_forest_coordinate_20251117_091207_scaler.pkl
+    model_base_name = model_name
     scaler_paths = [
+        os.path.join(config_dir, f"{model_base_name}_scaler.pkl") if config_dir else None,
+        os.path.join(model_dir, f"{model_base_name}_scaler.pkl"),
+        # 하위 호환성: 일반적인 scaler.pkl 파일
         os.path.join(model_dir, "scaler.pkl"),
         os.path.join(model_dir, "preprocessor_config.pkl"),
-        os.path.join(os.path.dirname(model_dir), "scaler.pkl"),  # 상위 디렉토리
-        os.path.join(os.path.dirname(model_dir), "preprocessor_config.pkl"),  # 상위 디렉토리
     ]
     
     # 추가 경로: train_gesture/train/models/ 디렉토리에서 찾기
     train_models_dir = os.path.join(os.path.dirname(os.path.dirname(model_dir)), "train", "models")
     if os.path.exists(train_models_dir):
         scaler_paths.extend([
+            os.path.join(train_models_dir, f"{model_base_name}_scaler.pkl"),
             os.path.join(train_models_dir, "scaler.pkl"),
             os.path.join(train_models_dir, "preprocessor_config.pkl"),
         ])
@@ -94,14 +97,14 @@ def load_model_config(model_path: str, config_dir: Optional[str] = None) -> Dict
                         # scaler가 fitted되었는지 확인
                         if hasattr(scaler_data, 'mean_') and scaler_data.mean_ is not None:
                             preprocessor_config['scaler'] = scaler_data
-                            logger.info(f"Loaded fitted scaler from {scaler_path}")
+                            logger.info(f"✅ Loaded fitted scaler from {scaler_path}")
                             break  # fitted된 scaler를 찾으면 중단
                     elif isinstance(scaler_data, dict):
                         if 'scaler' in scaler_data:
                             scaler = scaler_data['scaler']
                             if hasattr(scaler, 'mean_') and scaler.mean_ is not None:
                                 preprocessor_config['scaler'] = scaler
-                                logger.info(f"Loaded fitted scaler from dict in {scaler_path}")
+                                logger.info(f"✅ Loaded fitted scaler from dict in {scaler_path}")
                                 break
                         preprocessor_config.update(scaler_data)
                         logger.info(f"Loaded preprocessor config from {scaler_path}")

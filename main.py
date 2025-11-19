@@ -247,13 +247,56 @@ class ARPhoneInterface:
                     'max_output_length': 1,
                     'use_thumb_only': True,  # 언제나 True
                     'target_transform': {'type': None},
-                    'scaler': None,  # 나중에 fit
+                    'scaler': None,  # scaler 파일에서 로드
                     'hand_features': [],
                     'type_code_pairs': [],
                     'type_vocab': {},
                     'code_vocab': {},
                     'label_threshold': 0.5
                 }
+                
+                # Scaler 파일 로드 (모델과 같은 디렉토리에서)
+                model_path_obj = Path(self.model_path)
+                model_dir = model_path_obj.parent
+                model_name = model_path_obj.stem  # 확장자 제외
+                scaler_path = model_dir / f"{model_name}_scaler.pkl"
+                
+                if scaler_path.exists():
+                    try:
+                        import pickle
+                        with open(scaler_path, 'rb') as f:
+                            scaler = pickle.load(f)
+                        # Scaler가 fitted되었는지 확인
+                        if hasattr(scaler, 'mean_') and scaler.mean_ is not None:
+                            self.preprocessor_config['scaler'] = scaler
+                            self.logger.info(f"✅ Loaded scaler from: {scaler_path}")
+                            self.logger.info(f"   Scaler feature count: {len(scaler.mean_)}")
+                        else:
+                            self.logger.warning(f"Scaler file found but not fitted: {scaler_path}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to load scaler from {scaler_path}: {e}")
+                else:
+                    # train_gesture/train/models 디렉토리에서도 시도
+                    train_gesture_scaler_path = train_gesture_dir / "train" / "models" / f"{model_name}_scaler.pkl"
+                    if train_gesture_scaler_path.exists():
+                        try:
+                            import pickle
+                            with open(train_gesture_scaler_path, 'rb') as f:
+                                scaler = pickle.load(f)
+                            if hasattr(scaler, 'mean_') and scaler.mean_ is not None:
+                                self.preprocessor_config['scaler'] = scaler
+                                # AR-phone/models에도 복사
+                                import shutil
+                                shutil.copy2(train_gesture_scaler_path, scaler_path)
+                                self.logger.info(f"✅ Loaded scaler from: {train_gesture_scaler_path}")
+                                self.logger.info(f"   Copied to: {scaler_path}")
+                                self.logger.info(f"   Scaler feature count: {len(scaler.mean_)}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to load scaler from {train_gesture_scaler_path}: {e}")
+                    else:
+                        self.logger.warning(f"Scaler file not found: {scaler_path}")
+                        self.logger.warning(f"  Also checked: {train_gesture_scaler_path}")
+                        self.logger.warning("  Will use features without normalization")
                 
                 # Touch threshold 고정
                 self.touch_threshold = 0.85
@@ -278,7 +321,7 @@ class ARPhoneInterface:
                 # 사용자가 지정한 모델 경로 사용
                 if not os.path.exists(self.model_path):
                     self.logger.error(f"모델 파일을 찾을 수 없습니다: {self.model_path}")
-                    return False
+                return False
             
             if not os.path.exists(self.model_path):
                 self.logger.error(f"모델 파일을 찾을 수 없습니다: {self.model_path}")
@@ -358,11 +401,32 @@ class ARPhoneInterface:
                         self.logger.warning(f"Failed to load model with compile=False: {e}")
                         self.model = tf.keras.models.load_model(self.model_path)
                 
-                # Scaler는 학습 시 저장된 것을 사용해야 하므로, 즉흥적으로 fit하지 않음
+                # Scaler 로드 시도 (모델 파일과 같은 디렉토리에서)
                 if not self.preprocessor_config.get('scaler'):
-                    self.logger.warning("Scaler not found in config. Will use features without normalization.")
-                    self.logger.warning("Note: Scaler should be saved during training and loaded from config files.")
-                    self.preprocessor_config['scaler'] = None
+                    model_path_obj = Path(self.model_path)
+                    model_dir = model_path_obj.parent
+                    model_name = model_path_obj.stem  # 확장자 제외
+                    scaler_path = model_dir / f"{model_name}_scaler.pkl"
+                    
+                    if scaler_path.exists():
+                        try:
+                            import pickle
+                            with open(scaler_path, 'rb') as f:
+                                scaler = pickle.load(f)
+                            if hasattr(scaler, 'mean_') and scaler.mean_ is not None:
+                                self.preprocessor_config['scaler'] = scaler
+                                self.logger.info(f"✅ Loaded scaler from: {scaler_path}")
+                                self.logger.info(f"   Scaler feature count: {len(scaler.mean_)}")
+                            else:
+                                self.logger.warning(f"Scaler file found but not fitted: {scaler_path}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to load scaler from {scaler_path}: {e}")
+                    
+                    # Scaler가 여전히 없으면 경고
+                    if not self.preprocessor_config.get('scaler'):
+                        self.logger.warning("Scaler not found. Will use features without normalization.")
+                        self.logger.warning("Note: Scaler should be saved during training and loaded from scaler.pkl file.")
+                        self.preprocessor_config['scaler'] = None
             
             self.scaler = self.preprocessor_config.get('scaler')
             
@@ -585,7 +649,7 @@ class ARPhoneInterface:
                 self.logger.error("Android 미러링 시작 실패")
                 return False  # test_android_mirror.py와 동일: 초기화 실패
             
-            self.logger.info("Android 스마트폰 미러링 시작 완료")
+                self.logger.info("Android 스마트폰 미러링 시작 완료")
             
             return True
             
@@ -664,38 +728,58 @@ class ARPhoneInterface:
                 
                 # Touch가 감지되었거나 touch detection이 비활성화된 경우에만 좌표 추론 수행
                 if touch_start:
-                    self.logger.debug(f"✅ Touch detected, proceeding with coordinate prediction")
+                    self.logger.info(f"✅ Touch detected, proceeding with coordinate prediction")
                 else:
-                    self.logger.debug(f"❌ Touch not detected, skipping coordinate prediction")
+                    self.logger.info(f"❌ Touch not detected, skipping coordinate prediction")
                     return
                 
                 # 시퀀스 전처리 및 예측
+                self.logger.debug(f"Preprocessing sequence (sequence_length={self.sequence_length}, buffer_size={len(self.sequence_buffer)})")
                 sequence = self._preprocess_sequence(hand_features)
                 
+                if sequence is None:
+                    self.logger.debug(f"Sequence is None (buffer not full: {len(self.sequence_buffer)}/{self.sequence_length})")
+                    return
+                
+                self.logger.debug(f"Sequence shape: {sequence.shape}")
+                
                 current_time = time.time()
-                if sequence is not None and (current_time - self.last_prediction_time) >= self.prediction_interval:
+                time_since_last = current_time - self.last_prediction_time
+                if time_since_last < self.prediction_interval:
+                    self.logger.debug(f"Skipping prediction (interval: {time_since_last:.3f}s < {self.prediction_interval}s)")
+                    return
+                
                     # 예측 수행
-                    self.logger.debug(f"🔮 Performing coordinate prediction...")
+                self.logger.info(f"🔮 Performing coordinate prediction...")
+                try:
                     predictions = self._predict(sequence)
+                    self.logger.debug(f"Predictions returned: {type(predictions)}, keys: {predictions.keys() if isinstance(predictions, dict) else 'N/A'}")
+                except Exception as e:
+                    self.logger.error(f"❌ Prediction failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return
+                
+                # train_gesture/realtime_inference.py와 동일: coordinate regression 방식
+                if predictions and 'coords' in predictions and predictions['coords'] is not None:
+                    x_coord, y_coord = predictions['coords']
+                    self.logger.info(f"📍 Coordinate predicted: X={x_coord}, Y={y_coord}")
                     
-                    # train_gesture/realtime_inference.py와 동일: coordinate regression 방식
-                    if predictions and 'coords' in predictions and predictions['coords'] is not None:
-                        x_coord, y_coord = predictions['coords']
-                        self.logger.info(f"📍 Coordinate predicted: X={x_coord}, Y={y_coord}")
-                        
-                        # Touch detection 결과 추가 (이미 수행됨)
-                        if 'touch_start' not in predictions:
-                            predictions['touch_start'] = touch_start
-                        
-                        # Android 제어 실행 (coordinate regression 방식)
-                        self.logger.debug(f"📱 Executing Android command...")
-                        self._execute_prediction(predictions, hand_features)
-                    elif predictions and 'events' in predictions and len(predictions['events']) > 0:
-                        # 기존 Multi-label 방식 (하위 호환성)
-                        self.logger.info(f"📍 Multi-label prediction: {len(predictions['events'])} events")
-                        self._execute_prediction(predictions, hand_features)
-                    else:
-                        self.logger.warning(f"⚠️ No valid predictions returned: {predictions}")
+                    # Touch detection 결과 추가 (이미 수행됨)
+                    if 'touch_start' not in predictions:
+                        predictions['touch_start'] = touch_start
+                    
+                    # Android 제어 실행 (coordinate regression 방식)
+                    self.logger.info(f"📱 Executing Android command...")
+                    self._execute_prediction(predictions, hand_features)
+                elif predictions and 'events' in predictions and len(predictions['events']) > 0:
+                    # 기존 Multi-label 방식 (하위 호환성)
+                    self.logger.info(f"📍 Multi-label prediction: {len(predictions['events'])} events")
+                    self._execute_prediction(predictions, hand_features)
+                else:
+                    self.logger.warning(f"⚠️ No valid predictions returned")
+                    self.logger.warning(f"   Predictions type: {type(predictions)}")
+                    self.logger.warning(f"   Predictions content: {predictions}")
                     
                     self.last_prediction_time = current_time
             
@@ -795,15 +879,18 @@ class ARPhoneInterface:
             # 마지막 프레임만 사용
             sequence = np.array([hand_features_scaled])
             sequence = sequence.reshape(1, 1, -1)  # (1, 1, features)
+            self.logger.debug(f"   Single frame sequence created: shape={sequence.shape}, feature_count={len(hand_features_scaled)}")
             return sequence
         
         # 충분한 길이의 시퀀스가 모였는지 확인
         if len(self.sequence_buffer) < self.sequence_length:
+            self.logger.debug(f"   Sequence buffer not full: {len(self.sequence_buffer)}/{self.sequence_length}")
             return None
         
         # 시퀀스 생성
         sequence = np.array(list(self.sequence_buffer))
         sequence = sequence.reshape(1, self.sequence_length, -1)  # (1, seq_len, features)
+        self.logger.debug(f"   Sequence created: shape={sequence.shape}")
         
         return sequence
     
@@ -974,8 +1061,15 @@ class ARPhoneInterface:
     def _predict(self, sequence: np.ndarray) -> Dict:
         """모델로 예측"""
         try:
+            if sequence is None:
+                self.logger.error("❌ _predict called with None sequence")
+                return {}
+            
+            self.logger.debug(f"🔮 _predict called with sequence shape: {sequence.shape}")
+            
             # ML 모델 또는 DL 모델에 따라 예측 방식 다름
             is_ml_model = self.model_path.endswith('.pkl') if hasattr(self, 'model_path') else False
+            self.logger.debug(f"   Model type: {'ML' if is_ml_model else 'DL'}, path: {self.model_path}")
             
             if is_ml_model:
                 # ML 모델: sequence를 2D로 변환 (n_samples, n_features)
@@ -990,7 +1084,9 @@ class ARPhoneInterface:
                     sequence_2d = sequence_2d[-1:]
                 
                 # ML 모델 예측 (coordinate regression)
+                self.logger.debug(f"   ML model input shape: {sequence_2d.shape}")
                 predictions = self.model.predict(sequence_2d)
+                self.logger.debug(f"   ML model output shape: {predictions.shape}, values: {predictions}")
                 
                 # ML 모델 출력: (n_samples, 2) - [x, y] 좌표
                 # DL 모델 형식으로 변환: [labels, values]
@@ -1035,9 +1131,13 @@ class ARPhoneInterface:
                 if is_ml_model:
                     # ML 모델: pred_values는 [x, y] 좌표 (coordinate regression)
                     # train_gesture/realtime_inference.py와 동일한 형식으로 변환
+                    self.logger.debug(f"   Processing ML model output: pred_values shape={pred_values.shape}, values={pred_values}")
+                    
                     if len(pred_values) >= 2:
                         x_coord_transformed = float(pred_values[0])
                         y_coord_transformed = float(pred_values[1])
+                        
+                        self.logger.debug(f"   Transformed coords: X={x_coord_transformed}, Y={y_coord_transformed}")
                         
                         # Target 역변환 적용 (변환이 사용된 경우)
                         target_transform = self.preprocessor_config.get('target_transform', {'type': None})
@@ -1045,6 +1145,7 @@ class ARPhoneInterface:
                             # 역변환 로직 (필요시 구현)
                             x_coord = int(x_coord_transformed)
                             y_coord = int(y_coord_transformed)
+                            self.logger.debug(f"   Target transform applied: {target_transform.get('type')}")
                         else:
                             x_coord = int(x_coord_transformed)
                             y_coord = int(y_coord_transformed)
@@ -1052,8 +1153,12 @@ class ARPhoneInterface:
                         # train_gesture/realtime_inference.py와 동일한 형식으로 반환
                         result['coords'] = [x_coord, y_coord]
                         result['touch_start'] = True  # touch detection은 이미 수행됨
-                    
-                    return result
+                        
+                        self.logger.debug(f"   Final result: {result}")
+                        return result
+                    else:
+                        self.logger.error(f"❌ pred_values length < 2: {len(pred_values)}")
+                        return result
                 
                 # DL 모델: Multi-label에서 활성화된 이벤트 추출
                 type_code_pairs = self.preprocessor_config.get('type_code_pairs', [])
@@ -1146,7 +1251,9 @@ class ARPhoneInterface:
             return result
             
         except Exception as e:
-            self.logger.error(f"예측 오류: {e}")
+            self.logger.error(f"❌ 예측 오류: {e}")
+            self.logger.error(f"   Sequence shape: {sequence.shape if sequence is not None else 'None'}")
+            self.logger.error(f"   Model path: {self.model_path if hasattr(self, 'model_path') else 'N/A'}")
             import traceback
             traceback.print_exc()
             return {}
