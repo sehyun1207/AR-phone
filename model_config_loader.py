@@ -7,10 +7,17 @@ import os
 import json
 import pickle
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from typing import Dict, Optional, Any
 import logging
+
+# TensorFlow는 DL 모델 로드 시에만 import (ML 모델 사용 시 불필요)
+try:
+    import tensorflow as tf
+    TENSORFLOW_AVAILABLE = True
+except ImportError:
+    TENSORFLOW_AVAILABLE = False
+    tf = None
 
 logger = logging.getLogger(__name__)
 
@@ -20,14 +27,19 @@ def load_model_config(model_path: str, config_dir: Optional[str] = None) -> Dict
     모델 경로에서 설정 파일을 찾아서 로드
     
     Args:
-        model_path: 모델 파일 경로 (.h5)
+        model_path: 모델 파일 경로 (.h5 또는 .pkl)
         config_dir: 설정 파일이 있는 디렉토리 (없으면 모델 파일과 같은 디렉토리)
     
     Returns:
         모델 설정 딕셔너리
     """
     model_dir = os.path.dirname(model_path) if os.path.dirname(model_path) else os.getcwd()
-    model_name = os.path.basename(model_path).replace('.h5', '')
+    # .h5 또는 .pkl 확장자 제거
+    model_name = os.path.basename(model_path)
+    if model_name.endswith('.h5'):
+        model_name = model_name.replace('.h5', '')
+    elif model_name.endswith('.pkl'):
+        model_name = model_name.replace('.pkl', '')
     
     # 설정 파일 경로들 시도
     config_paths = [
@@ -108,7 +120,9 @@ def load_model_config(model_path: str, config_dir: Optional[str] = None) -> Dict
                         results = json.load(f)
                         # 모델 이름으로 찾기
                         for key, model_info in results.items():
-                            if model_info.get('model_path', '').endswith(model_name + '.h5'):
+                            model_path_in_results = model_info.get('model_path', '')
+                            if (model_path_in_results.endswith(model_name + '.h5') or 
+                                model_path_in_results.endswith(model_name + '.pkl')):
                                 # preprocessing_config 추출
                                 if 'preprocessing_config' in model_info:
                                     preprocessor_config.update(model_info['preprocessing_config'])
@@ -194,13 +208,33 @@ def load_model_and_config(
     Returns:
         (model, preprocessor_config) 튜플
     """
-    # 모델 로드
+    # 모델 로드 (ML 모델 또는 DL 모델)
     logger.info(f"Loading model from {model_path}")
-    try:
-        model = tf.keras.models.load_model(model_path, compile=False)
-    except Exception as e:
-        logger.warning(f"Failed to load model with compile=False: {e}")
-        model = tf.keras.models.load_model(model_path)
+    is_ml_model = model_path.endswith('.pkl')
+    
+    if is_ml_model:
+        # ML 모델 (pickle)
+        try:
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+            logger.info(f"ML model loaded: {type(model).__name__}")
+        except Exception as e:
+            logger.error(f"Failed to load ML model from {model_path}: {e}")
+            raise
+    else:
+        # DL 모델 (TensorFlow)
+        if not TENSORFLOW_AVAILABLE:
+            raise ImportError("TensorFlow is not available. Cannot load .h5 model files.")
+        try:
+            model = tf.keras.models.load_model(model_path, compile=False)
+            logger.info("TensorFlow model loaded")
+        except Exception as e:
+            logger.warning(f"Failed to load model with compile=False: {e}")
+            try:
+                model = tf.keras.models.load_model(model_path)
+            except Exception as e2:
+                logger.error(f"Failed to load TensorFlow model from {model_path}: {e2}")
+                raise
     
     # 설정 로드 시도
     preprocessor_config = load_model_config(model_path, config_dir)
