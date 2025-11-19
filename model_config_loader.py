@@ -250,27 +250,11 @@ def load_model_and_config(
             logger.info("Scaler is already fitted")
     
     if not scaler_fitted:
-        # scaler가 없거나 fitted되지 않은 경우, 학습 데이터로 fit 시도
-        if session_id and data_dir:
-            logger.warning(f"Scaler not fitted. Attempting to fit scaler from training data (session_id={session_id})")
-            try:
-                # train_gesture의 DataPreprocessor를 사용하여 scaler를 fit
-                scaler = _fit_scaler_from_training_data(
-                    session_id=session_id,
-                    data_dir=data_dir,
-                    sequence_length=sequence_length,
-                    use_thumb_only=use_thumb_only
-                )
-                if scaler:
-                    preprocessor_config = preprocessor_config or {}
-                    preprocessor_config['scaler'] = scaler
-                    logger.info("Successfully fitted scaler from training data")
-                    scaler_fitted = True
-            except Exception as e:
-                logger.warning(f"Failed to fit scaler from training data: {e}")
-                logger.warning("Will use features without normalization")
-        else:
-            logger.warning("Scaler not fitted and session_id/data_dir not provided. Will use features without normalization")
+        # scaler가 없거나 fitted되지 않은 경우
+        # 학습 시 저장된 scaler를 사용해야 하므로, 즉흥적으로 fit하지 않음
+        logger.warning("Scaler not fitted. Will use features without normalization.")
+        logger.warning("Note: Scaler should be saved during training and loaded from config files.")
+        preprocessor_config['scaler'] = None
     
     # 설정이 없으면 기본값 사용
     if not preprocessor_config:
@@ -304,9 +288,10 @@ def load_model_and_config(
         preprocessor_config.setdefault('use_thumb_only', use_thumb_only)
         preprocessor_config.setdefault('label_threshold', 0.5)
     
-    # 모델 출력 형태 확인하여 type_code_pairs 생성
-    if not preprocessor_config.get('type_code_pairs'):
-        # 기본 type_code_pairs 생성 (모델 출력 크기 기반)
+    # 모델 출력 형태 확인하여 type_code_pairs 생성 (DL 모델만, ML 모델은 제외)
+    is_ml_model = model_path.endswith('.pkl')
+    if not preprocessor_config.get('type_code_pairs') and not is_ml_model:
+        # DL 모델(TensorFlow)만 type_code_pairs 생성
         try:
             # 모델 출력 형태 확인
             if isinstance(model.output, list):
@@ -340,6 +325,10 @@ def load_model_and_config(
         except Exception as e:
             logger.warning(f"Failed to generate type_code_pairs: {e}")
             preprocessor_config['type_code_pairs'] = []
+    elif is_ml_model:
+        # ML 모델은 coordinate regression이므로 type_code_pairs 불필요
+        preprocessor_config['type_code_pairs'] = []
+        logger.info("ML model detected: type_code_pairs not needed (coordinate regression)")
     
     return model, preprocessor_config
 

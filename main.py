@@ -358,22 +358,11 @@ class ARPhoneInterface:
                         self.logger.warning(f"Failed to load model with compile=False: {e}")
                         self.model = tf.keras.models.load_model(self.model_path)
                 
-                # Scaler가 없으면 fit 시도 (model_config_loader의 함수 사용)
-                if not self.preprocessor_config.get('scaler') and data_dir:
-                    try:
-                        from model_config_loader import _fit_scaler_from_training_data
-                        # 첫 번째 session_id 사용
-                        scaler = _fit_scaler_from_training_data(
-                            session_id=session_id,
-                            data_dir=data_dir,
-                            sequence_length=1,
-                            use_thumb_only=True
-                        )
-                        if scaler:
-                            self.preprocessor_config['scaler'] = scaler
-                            self.logger.info("Successfully fitted scaler from training data")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to fit scaler: {e}")
+                # Scaler는 학습 시 저장된 것을 사용해야 하므로, 즉흥적으로 fit하지 않음
+                if not self.preprocessor_config.get('scaler'):
+                    self.logger.warning("Scaler not found in config. Will use features without normalization.")
+                    self.logger.warning("Note: Scaler should be saved during training and loaded from config files.")
+                    self.preprocessor_config['scaler'] = None
             
             self.scaler = self.preprocessor_config.get('scaler')
             
@@ -674,25 +663,39 @@ class ARPhoneInterface:
                         return  # Early return
                 
                 # Touch가 감지되었거나 touch detection이 비활성화된 경우에만 좌표 추론 수행
+                if touch_start:
+                    self.logger.debug(f"✅ Touch detected, proceeding with coordinate prediction")
+                else:
+                    self.logger.debug(f"❌ Touch not detected, skipping coordinate prediction")
+                    return
+                
                 # 시퀀스 전처리 및 예측
                 sequence = self._preprocess_sequence(hand_features)
                 
                 current_time = time.time()
                 if sequence is not None and (current_time - self.last_prediction_time) >= self.prediction_interval:
                     # 예측 수행
+                    self.logger.debug(f"🔮 Performing coordinate prediction...")
                     predictions = self._predict(sequence)
                     
                     # train_gesture/realtime_inference.py와 동일: coordinate regression 방식
                     if predictions and 'coords' in predictions and predictions['coords'] is not None:
+                        x_coord, y_coord = predictions['coords']
+                        self.logger.info(f"📍 Coordinate predicted: X={x_coord}, Y={y_coord}")
+                        
                         # Touch detection 결과 추가 (이미 수행됨)
                         if 'touch_start' not in predictions:
                             predictions['touch_start'] = touch_start
                         
                         # Android 제어 실행 (coordinate regression 방식)
+                        self.logger.debug(f"📱 Executing Android command...")
                         self._execute_prediction(predictions, hand_features)
                     elif predictions and 'events' in predictions and len(predictions['events']) > 0:
                         # 기존 Multi-label 방식 (하위 호환성)
+                        self.logger.info(f"📍 Multi-label prediction: {len(predictions['events'])} events")
                         self._execute_prediction(predictions, hand_features)
+                    else:
+                        self.logger.warning(f"⚠️ No valid predictions returned: {predictions}")
                     
                     self.last_prediction_time = current_time
             
