@@ -648,26 +648,21 @@ class ARPhoneInterface:
             if self.debug_mode:
                 self._update_debug_frame(processed_frame, hands_data)
             
-            # Hand feature 추출
+            # Hand feature 추출 (coordinate 모델용: 15 features, 손목 포함)
             hand_features = self._extract_hand_features(hands_data)
             
             if hand_features is not None:
-                # 정규화된 hand features (touch detection용)
-                hand_features_scaled = None
-                if self.scaler:
-                    try:
-                        if hasattr(self.scaler, 'mean_') and self.scaler.mean_ is not None:
-                            hand_features_scaled = self.scaler.transform([hand_features])[0]
-                    except Exception as e:
-                        self.logger.warning(f"Scaler transform failed for touch detection: {e}")
-                        hand_features_scaled = hand_features
-                else:
-                    hand_features_scaled = hand_features
+                # Touch detection용 feature 추출 (12 features, 손목 제외)
+                touch_features = None
+                if self.use_touch_detection:
+                    touch_features = self._extract_touch_detection_features(hands_data)
                 
                 # Touch detection을 먼저 수행 (train_gesture/realtime_inference.py와 동일한 로직)
                 touch_start = True  # 기본값: True (터치 감지 모델이 없으면 항상 True)
-                if self.use_touch_detection and hand_features_scaled is not None:
-                    touch_start = self.predict_touch(hand_features_scaled)
+                if self.use_touch_detection and touch_features is not None:
+                    # Touch detection용 feature 정규화 (별도 scaler 필요할 수 있음)
+                    # 현재는 정규화 없이 사용 (delta feature이므로)
+                    touch_start = self.predict_touch(touch_features)
                     
                     # Touch가 감지되지 않으면 좌표 추론을 건너뜀
                     if not touch_start:
@@ -804,6 +799,63 @@ class ARPhoneInterface:
         
         return sequence
     
+    def _extract_touch_detection_features(self, hands_data: list) -> Optional[np.ndarray]:
+        """Touch detection 모델용 feature 추출 (손목 제외, 4개 관절만: 12 features)
+        
+        train_gesture/realtime_inference.py와 동일:
+        - use_thumb_only=True일 때: 4개 관절 (CMC, MCP, IP, Tip) * 3 coords = 12 features
+        - 손목은 상대 좌표 변환에만 사용하고 feature에서는 제외
+        """
+        if not hands_data or len(hands_data) == 0:
+            return None
+        
+        hand = hands_data[0]
+        landmarks = hand.get('landmarks', [])
+        WRIST_INDEX = 0
+        
+        if self.use_thumb_only:
+            min_landmarks = 5  # 손목 포함하여 상대 좌표 변환에 필요
+            feature_count = 12  # 4 joints * 3 coords (손목 제외)
+            thumb_indices_no_wrist = [1, 2, 3, 4]  # 손목 제외
+        else:
+            min_landmarks = 21
+            feature_count = 60  # 20 joints * 3 coords (손목 제외)
+        
+        if not landmarks or len(landmarks) < min_landmarks:
+            return None
+        
+        # 손목 좌표 추출 (원점으로 사용)
+        wrist = landmarks[WRIST_INDEX]
+        wrist_x = wrist.get('x', 0.0)
+        wrist_y = wrist.get('y', 0.0)
+        wrist_z = wrist.get('z', 0.0)
+        
+        # 랜드마크를 feature 벡터로 변환 (손목 기준 상대 좌표, 손목 제외)
+        features = []
+        if self.use_thumb_only:
+            for idx in thumb_indices_no_wrist:  # 손목 제외
+                if idx < len(landmarks):
+                    landmark = landmarks[idx]
+                    features.append(landmark.get('x', 0.0) - wrist_x)
+                    features.append(landmark.get('y', 0.0) - wrist_y)
+                    features.append(landmark.get('z', 0.0) - wrist_z)
+                else:
+                    features.extend([0.0, 0.0, 0.0])
+        else:
+            for idx in range(1, 21):  # 손목(0) 제외
+                if idx < len(landmarks):
+                    landmark = landmarks[idx]
+                    features.append(landmark.get('x', 0.0) - wrist_x)
+                    features.append(landmark.get('y', 0.0) - wrist_y)
+                    features.append(landmark.get('z', 0.0) - wrist_z)
+                else:
+                    features.extend([0.0, 0.0, 0.0])
+        
+        while len(features) < feature_count:
+            features.append(0.0)
+        
+        return np.array(features[:feature_count])
+    
     def predict_touch(self, hand_features_scaled: np.ndarray) -> bool:
         """Touch detection model로 터치 여부 예측 (train_gesture/realtime_inference.py와 동일한 로직)
         
@@ -813,6 +865,7 @@ class ARPhoneInterface:
         
         Args:
             hand_features_scaled: 정규화된 hand features (n_features,) 또는 (1, n_features)
+                                 12 features (손목 제외, 4개 관절만)
         
         Returns:
             bool: Touch 여부 (True: touching, False: not touching)
@@ -826,6 +879,10 @@ class ARPhoneInterface:
                 current_features = hand_features_scaled[0]  # (n_features,)
             else:
                 current_features = hand_features_scaled.flatten()  # (n_features,)
+            
+            # Feature 개수 확인 (디버깅용)
+            if len(current_features) != 12:
+                self.logger.warning(f"Touch detection feature count mismatch: expected 12, got {len(current_features)}")
             
             if self.touch_model_is_sequential:
                 # Sequential model: 버퍼에서 읽어서 예측
