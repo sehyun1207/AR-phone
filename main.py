@@ -49,7 +49,8 @@ class ARPhoneInterface:
         # 모델 설정
         self.model_path = self.config.get('model_path', None)
         self.session_id = self.config.get('session_id', 'optimized_session_20251102')
-        self.use_thumb_only = self.config.get('use_thumb_only', True)
+        # 언제나 use_thumb_only = True (고정)
+        self.use_thumb_only = True
         self.use_pattern_analysis = self.config.get('use_pattern_analysis', True)
         self.sequence_length = self.config.get('sequence_length', 30)
         self.max_output_length = self.config.get('max_output_length', 20)
@@ -60,6 +61,17 @@ class ARPhoneInterface:
         self.preprocessor_config = {}
         self.label_encoders = {}
         self.scaler = None
+        self.touch_model_path = self.config.get('touch_model_path', None)
+        # Touch threshold 고정: 0.85
+        self.touch_threshold = 0.85
+        self.touch_model = None
+        self.touch_model_type = None  # 'tensorflow' or 'tree_based'
+        self.use_touch_detection = False
+        self.touch_model_is_sequential = False
+        self.touch_sequence_length = None
+        self.touch_frame_buffer = None
+        # Delta feature 계산을 위한 이전 frame 저장 (단일 프레임 모델용)
+        self.previous_hand_features_scaled = None
         
         # train_gesture 컴포넌트
         self.gesture_detector = None  # train_gesture의 GestureDetector
@@ -89,6 +101,12 @@ class ARPhoneInterface:
         self.prediction_interval = 0.1  # 0.1초마다 예측
         self.last_prediction_events = []
         self.last_predicted_sequence = None
+        
+        # Touch 상태 변화 추적 및 swipe 관리 (train_gesture/realtime_inference.py와 동일)
+        self.last_touch_state = None  # 이전 touch 상태 (True/False)
+        self.swipe_in_progress = False  # Swipe 진행 중 여부
+        self.swipe_coords_buffer = []  # Swipe 중인 좌표들 버퍼 (시작점부터 현재까지)
+        self.swipe_duration_ms = 300  # Android swipe 명령어의 duration (밀리초)
         
         # 터치 가능 영역 및 화면 크기
         self.touchable_x_min = 10
@@ -158,6 +176,10 @@ class ARPhoneInterface:
             if self.use_pattern_analysis and PATTERN_ANALYZER_AVAILABLE:
                 self._initialize_pattern_analyzer()
             
+            # Touch model 로드 (옵션)
+            if self.touch_model_path:
+                self._load_touch_model()
+            
             # Android 미러링 초기화
             if not self._initialize_phone_mirroring():
                 self.logger.warning("Android 미러링 초기화 실패 - 오프라인 모드로 계속 실행")
@@ -175,12 +197,87 @@ class ARPhoneInterface:
     def _load_model_and_config(self) -> bool:
         """모델 및 전처리 설정 로드"""
         try:
-            # 모델 경로 확인
+            from pathlib import Path
+            import shutil
+            
+            # 고정된 최고 성능 모델 경로
+            base_dir = Path(__file__).parent
+            train_gesture_dir = base_dir.parent / "train_gesture"
+            
+            # Best coordinate model 경로
+            best_coordinate_model = train_gesture_dir / "train" / "models" / "random_forest_coordinate_20251117_091207.pkl"
+            # Best touch model 경로
+            best_touch_model = train_gesture_dir / "train" / "models" / "touch_detection_random-forest_20251112_201232.pkl"
+            
+            # 모델 경로가 지정되지 않았거나 기본값인 경우 고정 모델 사용
+            # 사용자가 명시적으로 --model-path를 지정하지 않은 경우에만 고정 모델 사용
             if not self.model_path:
-                self.logger.error("모델 경로가 지정되지 않았습니다")
-                self.logger.error("--model-path 옵션으로 모델 경로를 지정해주세요")
-                self.logger.error("예: --model-path ../train_gesture/train/models/basic_lstm_20251103_212301.h5")
-                return False
+                # AR-phone/models 디렉토리에 복사
+                models_dir = base_dir / "models"
+                models_dir.mkdir(exist_ok=True)
+                
+                # Coordinate model 복사
+                if best_coordinate_model.exists():
+                    dest_coordinate = models_dir / best_coordinate_model.name
+                    if not dest_coordinate.exists():
+                        shutil.copy2(best_coordinate_model, dest_coordinate)
+                        self.logger.info(f"Copied coordinate model to: {dest_coordinate}")
+                    self.model_path = str(dest_coordinate)
+                else:
+                    self.logger.error(f"Best coordinate model not found: {best_coordinate_model}")
+                    return False
+                
+                # Touch model 복사
+                if best_touch_model.exists():
+                    dest_touch = models_dir / best_touch_model.name
+                    if not dest_touch.exists():
+                        shutil.copy2(best_touch_model, dest_touch)
+                        self.logger.info(f"Copied touch model to: {dest_touch}")
+                    self.touch_model_path = str(dest_touch)
+                    self.config.set('touch_model_path', self.touch_model_path)
+                else:
+                    self.logger.warning(f"Best touch model not found: {best_touch_model}")
+                    self.touch_model_path = None
+                
+                # 고정된 preprocessing 설정 (최고 성능 모델의 설정)
+                self.preprocessor_config = {
+                    'sequence_length': 1,
+                    'time_window': 0.2,
+                    'max_output_length': 1,
+                    'use_thumb_only': True,  # 언제나 True
+                    'target_transform': {'type': None},
+                    'scaler': None,  # 나중에 fit
+                    'hand_features': [],
+                    'type_code_pairs': [],
+                    'type_vocab': {},
+                    'code_vocab': {},
+                    'label_threshold': 0.5
+                }
+                
+                # Touch threshold 고정
+                self.touch_threshold = 0.85
+                self.config.set('touch_threshold', 0.85)
+                
+                # Preprocessing 설정에서 파라미터 업데이트
+                self.sequence_length = 1
+                self.max_output_length = 1
+                self.time_window = 0.2
+                self.use_thumb_only = True  # 언제나 True
+                self.sequence_buffer = deque(maxlen=self.sequence_length)
+                
+                self.logger.info("=" * 80)
+                self.logger.info("USING FIXED BEST MODELS")
+                self.logger.info("=" * 80)
+                self.logger.info(f"Coordinate model: {self.model_path}")
+                self.logger.info(f"Touch model: {self.touch_model_path}")
+                self.logger.info(f"Touch threshold: {self.touch_threshold}")
+                self.logger.info(f"Use thumb only: {self.use_thumb_only}")
+                self.logger.info("=" * 80)
+            else:
+                # 사용자가 지정한 모델 경로 사용
+                if not os.path.exists(self.model_path):
+                    self.logger.error(f"모델 파일을 찾을 수 없습니다: {self.model_path}")
+                    return False
             
             if not os.path.exists(self.model_path):
                 self.logger.error(f"모델 파일을 찾을 수 없습니다: {self.model_path}")
@@ -192,39 +289,90 @@ class ARPhoneInterface:
                 config_dir = os.path.abspath(config_dir)
             
             # session_id와 data_dir 가져오기 (scaler fit을 위해 - train_gesture 방식)
-            session_id = self.config.get('session_id', self.session_id)
-            # 데이터 디렉토리 경로 (AR-phone 내부 우선, 없으면 train_gesture 경로)
-            data_dir = self.config.get('data_dir', None)
-            if not data_dir:
-                # AR-phone 내부 데이터 디렉토리 우선 확인
-                from pathlib import Path
-                base_dir = Path(__file__).parent
+            # 고정된 모델의 session_ids 사용
+            session_ids = [
+                "optimized_session_1762580384",
+                "optimized_session_1762671648",
+                "optimized_session_1762676322",
+                "optimized_session_1763190152"
+            ]
+            session_id = session_ids[0]  # 첫 번째 세션을 기본값으로
+            
+            # 데이터 디렉토리 경로 (train_gesture 경로 우선)
+            from pathlib import Path
+            base_dir = Path(__file__).parent
+            data_dir = None
+            
+            # train_gesture 경로 시도
+            train_gesture_data_dir = str(base_dir.parent / "train_gesture" / "train" / "data" / "processed")
+            if os.path.exists(train_gesture_data_dir):
+                data_dir = train_gesture_data_dir
+            else:
+                # AR-phone 내부 데이터 디렉토리 확인
                 ar_phone_data_dir = str(base_dir / "data" / "processed")
                 if os.path.exists(ar_phone_data_dir):
                     data_dir = ar_phone_data_dir
                 else:
-                    # train_gesture 경로 시도
-                    train_gesture_data_dir = str(base_dir.parent / "train_gesture" / "train" / "data" / "processed")
+                    # 상대 경로로도 시도
+                    train_gesture_data_dir = str(base_dir.parent / "train_gesture" / "data" / "processed")
                     if os.path.exists(train_gesture_data_dir):
                         data_dir = train_gesture_data_dir
-                    else:
-                        # 상대 경로로도 시도
-                        train_gesture_data_dir = str(base_dir.parent / "train_gesture" / "data" / "processed")
-                        if os.path.exists(train_gesture_data_dir):
-                            data_dir = train_gesture_data_dir
-                        else:
-                            data_dir = None
             
-            self.model, self.preprocessor_config = load_model_and_config(
-                model_path=self.model_path,
-                config_dir=config_dir,
-                sequence_length=self.sequence_length,
-                max_output_length=self.max_output_length,
-                time_window=self.time_window,
-                use_thumb_only=self.use_thumb_only,
-                session_id=session_id,
-                data_dir=data_dir
-            )
+            # Preprocessor config가 이미 설정되어 있으면 그대로 사용, 없으면 로드
+            if not hasattr(self, 'preprocessor_config') or not self.preprocessor_config:
+                # 기본 설정으로 로드
+                self.model, loaded_preprocessor_config = load_model_and_config(
+                    model_path=self.model_path,
+                    config_dir=config_dir,
+                    sequence_length=self.sequence_length,
+                    max_output_length=self.max_output_length,
+                    time_window=self.time_window,
+                    use_thumb_only=True,  # 언제나 True
+                    session_id=session_id,
+                    data_dir=data_dir
+                )
+                # 로드된 설정과 고정 설정 병합
+                if self.preprocessor_config:
+                    self.preprocessor_config.update(loaded_preprocessor_config)
+                    # 고정값 유지
+                    self.preprocessor_config['use_thumb_only'] = True
+                    self.preprocessor_config['sequence_length'] = 1
+                    self.preprocessor_config['time_window'] = 0.2
+                    self.preprocessor_config['max_output_length'] = 1
+                else:
+                    self.preprocessor_config = loaded_preprocessor_config
+            else:
+                # 모델만 로드 (preprocessor_config는 이미 설정됨)
+                is_ml_model = self.model_path.endswith('.pkl')
+                if is_ml_model:
+                    import pickle
+                    with open(self.model_path, 'rb') as f:
+                        self.model = pickle.load(f)
+                    self.logger.info(f"ML model loaded: {type(self.model).__name__}")
+                else:
+                    import tensorflow as tf
+                    try:
+                        self.model = tf.keras.models.load_model(self.model_path, compile=False)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to load model with compile=False: {e}")
+                        self.model = tf.keras.models.load_model(self.model_path)
+                
+                # Scaler가 없으면 fit 시도 (model_config_loader의 함수 사용)
+                if not self.preprocessor_config.get('scaler') and data_dir:
+                    try:
+                        from model_config_loader import _fit_scaler_from_training_data
+                        # 첫 번째 session_id 사용
+                        scaler = _fit_scaler_from_training_data(
+                            session_id=session_id,
+                            data_dir=data_dir,
+                            sequence_length=1,
+                            use_thumb_only=True
+                        )
+                        if scaler:
+                            self.preprocessor_config['scaler'] = scaler
+                            self.logger.info("Successfully fitted scaler from training data")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to fit scaler: {e}")
             
             self.scaler = self.preprocessor_config.get('scaler')
             
@@ -238,8 +386,13 @@ class ARPhoneInterface:
             else:
                 self.logger.warning(f"  Scaler: NOT FOUND (features will NOT be normalized)")
             
-            self.use_thumb_only = self.preprocessor_config.get('use_thumb_only', self.use_thumb_only)
-            self.sequence_length = self.preprocessor_config.get('sequence_length', self.sequence_length)
+            # 언제나 use_thumb_only = True (고정)
+            self.use_thumb_only = True
+            self.preprocessor_config['use_thumb_only'] = True
+            # 고정된 설정값 사용
+            self.sequence_length = self.preprocessor_config.get('sequence_length', 1)
+            self.max_output_length = self.preprocessor_config.get('max_output_length', 1)
+            self.time_window = self.preprocessor_config.get('time_window', 0.2)
             self.label_encoders = {}  # label_encoders는 Multi-label 방식에서는 사용하지 않음
             
             self.logger.info(f"모델 로드 완료")
@@ -361,6 +514,69 @@ class ARPhoneInterface:
             self.logger.warning(f"Pattern analyzer 초기화 실패: {e}")
             self.use_pattern_analysis = False
     
+    def _load_touch_model(self):
+        """Touch detection 모델 로드 (train_gesture/realtime_inference.py와 동일한 로직)"""
+        try:
+            if not self.touch_model_path or not os.path.exists(self.touch_model_path):
+                self.logger.warning("Touch model path not found, touch detection disabled")
+                self.touch_model = None
+                self.use_touch_detection = False
+                return
+            
+            self.use_touch_detection = True
+            
+            # 모델 파일 확장자로 타입 판단
+            if self.touch_model_path.endswith('.pkl'):
+                # 트리 기반 모델 (XGBoost, LightGBM, CatBoost, Random Forest)
+                import pickle
+                with open(self.touch_model_path, 'rb') as f:
+                    self.touch_model = pickle.load(f)
+                self.touch_model_type = 'tree_based'
+                self.touch_model_is_sequential = False  # 트리 기반 모델은 항상 단일 프레임
+                self.logger.info(f"Tree-based touch detection model loaded: {type(self.touch_model).__name__}")
+                self.logger.info(f"Touch threshold: {self.touch_threshold}")
+            else:
+                # TensorFlow 모델 (.h5)
+                import tensorflow as tf
+                self.touch_model = tf.keras.models.load_model(self.touch_model_path)
+                self.touch_model_type = 'tensorflow'
+                self.logger.info("TensorFlow touch detection model loaded")
+                self.logger.info(f"Touch threshold: {self.touch_threshold}")
+                
+                # Check if touch model is sequential (expects 3D input: batch, sequence_length, features)
+                if hasattr(self.touch_model, 'input_shape'):
+                    touch_input_shape = self.touch_model.input_shape
+                    if isinstance(touch_input_shape, list) and len(touch_input_shape) > 0:
+                        touch_input_shape = touch_input_shape[0]
+                elif hasattr(self.touch_model, 'inputs') and len(self.touch_model.inputs) > 0:
+                    touch_input_shape = tuple(self.touch_model.inputs[0].shape.as_list())
+                else:
+                    touch_input_shape = None
+                
+                if touch_input_shape is not None:
+                    shape_without_batch = tuple(s for s in touch_input_shape if s is not None and s != -1)
+                    
+                    if len(shape_without_batch) == 2:
+                        # Sequential model: (sequence_length, features)
+                        self.touch_model_is_sequential = True
+                        self.touch_sequence_length = shape_without_batch[0]
+                        self.touch_frame_buffer = deque(maxlen=self.touch_sequence_length)
+                        self.logger.info(f"Touch model is sequential: requires {self.touch_sequence_length} frames")
+                    elif len(shape_without_batch) == 1:
+                        # Single frame model: (features,)
+                        self.touch_model_is_sequential = False
+                        self.logger.info("Touch model is single-frame")
+                    else:
+                        self.logger.warning(f"Unexpected touch model input shape: {touch_input_shape}")
+                else:
+                    self.logger.warning("Could not determine touch model input shape")
+            
+            self.logger.info(f"Touch detection: ENABLED (threshold={self.touch_threshold})")
+        except Exception as e:
+            self.logger.warning(f"Failed to load touch model: {e}")
+            self.touch_model = None
+            self.use_touch_detection = False
+    
     def _initialize_phone_mirroring(self) -> bool:
         """Android 스마트폰 미러링 초기화"""
         try:
@@ -436,6 +652,28 @@ class ARPhoneInterface:
             hand_features = self._extract_hand_features(hands_data)
             
             if hand_features is not None:
+                # 정규화된 hand features (touch detection용)
+                hand_features_scaled = None
+                if self.scaler:
+                    try:
+                        if hasattr(self.scaler, 'mean_') and self.scaler.mean_ is not None:
+                            hand_features_scaled = self.scaler.transform([hand_features])[0]
+                    except Exception as e:
+                        self.logger.warning(f"Scaler transform failed for touch detection: {e}")
+                        hand_features_scaled = hand_features
+                else:
+                    hand_features_scaled = hand_features
+                
+                # Touch detection을 먼저 수행 (train_gesture/realtime_inference.py와 동일한 로직)
+                touch_start = True  # 기본값: True (터치 감지 모델이 없으면 항상 True)
+                if self.use_touch_detection and hand_features_scaled is not None:
+                    touch_start = self.predict_touch(hand_features_scaled)
+                    
+                    # Touch가 감지되지 않으면 좌표 추론을 건너뜀
+                    if not touch_start:
+                        return  # Early return
+                
+                # Touch가 감지되었거나 touch detection이 비활성화된 경우에만 좌표 추론 수행
                 # 시퀀스 전처리 및 예측
                 sequence = self._preprocess_sequence(hand_features)
                 
@@ -444,8 +682,16 @@ class ARPhoneInterface:
                     # 예측 수행
                     predictions = self._predict(sequence)
                     
-                    if predictions and 'events' in predictions and len(predictions['events']) > 0:
-                        # Android 제어 실행
+                    # train_gesture/realtime_inference.py와 동일: coordinate regression 방식
+                    if predictions and 'coords' in predictions and predictions['coords'] is not None:
+                        # Touch detection 결과 추가 (이미 수행됨)
+                        if 'touch_start' not in predictions:
+                            predictions['touch_start'] = touch_start
+                        
+                        # Android 제어 실행 (coordinate regression 방식)
+                        self._execute_prediction(predictions, hand_features)
+                    elif predictions and 'events' in predictions and len(predictions['events']) > 0:
+                        # 기존 Multi-label 방식 (하위 호환성)
                         self._execute_prediction(predictions, hand_features)
                     
                     self.last_prediction_time = current_time
@@ -541,6 +787,13 @@ class ARPhoneInterface:
         # 시퀀스 버퍼에 추가
         self.sequence_buffer.append(hand_features_scaled.copy())
         
+        # sequence_length가 1인 경우 (단일 프레임 모델)
+        if self.sequence_length == 1:
+            # 마지막 프레임만 사용
+            sequence = np.array([hand_features_scaled])
+            sequence = sequence.reshape(1, 1, -1)  # (1, 1, features)
+            return sequence
+        
         # 충분한 길이의 시퀀스가 모였는지 확인
         if len(self.sequence_buffer) < self.sequence_length:
             return None
@@ -551,10 +804,143 @@ class ARPhoneInterface:
         
         return sequence
     
+    def predict_touch(self, hand_features_scaled: np.ndarray) -> bool:
+        """Touch detection model로 터치 여부 예측 (train_gesture/realtime_inference.py와 동일한 로직)
+        
+        Delta feature 기반 단일 프레임 모델:
+        - 현재 frame과 직전 frame의 차이(delta)를 계산
+        - Delta feature를 touch detection 모델에 입력하여 touch 여부 판별
+        
+        Args:
+            hand_features_scaled: 정규화된 hand features (n_features,) 또는 (1, n_features)
+        
+        Returns:
+            bool: Touch 여부 (True: touching, False: not touching)
+        """
+        if not self.use_touch_detection or self.touch_model is None:
+            return True  # Touch detection이 없으면 항상 True (기존 동작)
+        
+        try:
+            # hand_features_scaled shape 정규화: (1, n_features) -> (n_features,)
+            if len(hand_features_scaled.shape) == 2 and hand_features_scaled.shape[0] == 1:
+                current_features = hand_features_scaled[0]  # (n_features,)
+            else:
+                current_features = hand_features_scaled.flatten()  # (n_features,)
+            
+            if self.touch_model_is_sequential:
+                # Sequential model: 버퍼에서 읽어서 예측
+                if self.touch_frame_buffer is None or len(self.touch_frame_buffer) < self.touch_sequence_length:
+                    return True  # 버퍼가 충분하지 않으면 True 반환
+                
+                sequence = np.array(list(self.touch_frame_buffer))
+                sequence = sequence.reshape(1, self.touch_sequence_length, -1)
+                
+                if self.touch_model_type == 'tree_based':
+                    self.logger.warning("Tree-based models do not support sequential input.")
+                    return True
+                
+                touch_pred = self.touch_model.predict(sequence, verbose=0, batch_size=1)
+                
+                if isinstance(touch_pred, np.ndarray):
+                    if len(touch_pred.shape) > 1:
+                        touch_prob = float(touch_pred[0, 0])
+                    else:
+                        touch_prob = float(touch_pred[0])
+                else:
+                    touch_prob = float(touch_pred)
+                
+                is_touching = touch_prob >= self.touch_threshold
+                
+                if is_touching:
+                    self.logger.info(f"✅ Touch detected (sequential): prob={touch_prob:.4f} >= threshold={self.touch_threshold:.4f}")
+                else:
+                    self.logger.info(f"❌ Touch NOT detected (sequential): prob={touch_prob:.4f} < threshold={self.touch_threshold:.4f}")
+                
+                return is_touching
+            else:
+                # Single frame model with delta features: 현재 frame - 이전 frame
+                if self.previous_hand_features_scaled is None:
+                    # 첫 번째 frame: delta를 계산할 수 없으므로 이전 frame만 저장하고 False 반환
+                    self.previous_hand_features_scaled = current_features.copy()
+                    return False
+                
+                # Delta 계산: 현재 frame - 이전 frame
+                delta_features = current_features - self.previous_hand_features_scaled  # (n_features,)
+                
+                # Delta feature를 모델 입력 형태로 변환: (n_features,) -> (1, n_features)
+                delta_frame = delta_features.reshape(1, -1)  # (1, n_features)
+                
+                # Touch detection 모델로 예측
+                if self.touch_model_type == 'tree_based':
+                    # 트리 기반 모델: predict_proba() 사용 (확률 반환)
+                    touch_proba = self.touch_model.predict_proba(delta_frame)
+                    touch_prob = float(touch_proba[0, 1])  # 클래스 1 (touching)의 확률
+                else:
+                    # TensorFlow 모델: predict() 사용
+                    touch_pred = self.touch_model.predict(delta_frame, verbose=0, batch_size=1)
+                    if isinstance(touch_pred, np.ndarray):
+                        if len(touch_pred.shape) > 1:
+                            touch_prob = float(touch_pred[0, 0])
+                        else:
+                            touch_prob = float(touch_pred[0])
+                    else:
+                        touch_prob = float(touch_pred)
+                
+                # 이전 frame 업데이트 (다음 예측을 위해)
+                self.previous_hand_features_scaled = current_features.copy()
+                
+                # Touch 여부 판단
+                is_touching = touch_prob >= self.touch_threshold
+                
+                # Touch detection 결과 로그 출력
+                if is_touching:
+                    self.logger.info(f"✅ Touch detected: prob={touch_prob:.4f} >= threshold={self.touch_threshold:.4f}")
+                else:
+                    self.logger.info(f"❌ Touch NOT detected: prob={touch_prob:.4f} < threshold={self.touch_threshold:.4f}")
+                
+                return is_touching
+            
+        except Exception as e:
+            self.logger.error(f"Touch detection prediction failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return True  # 에러 시 True 반환 (기존 동작 유지)
+    
     def _predict(self, sequence: np.ndarray) -> Dict:
         """모델로 예측"""
         try:
-            predictions = self.model.predict(sequence, verbose=0, batch_size=1)
+            # ML 모델 또는 DL 모델에 따라 예측 방식 다름
+            is_ml_model = self.model_path.endswith('.pkl') if hasattr(self, 'model_path') else False
+            
+            if is_ml_model:
+                # ML 모델: sequence를 2D로 변환 (n_samples, n_features)
+                # sequence shape: (1, seq_len, features) -> (seq_len, features)
+                if len(sequence.shape) == 3:
+                    sequence_2d = sequence.reshape(-1, sequence.shape[-1])
+                else:
+                    sequence_2d = sequence
+                
+                # 마지막 프레임만 사용 (단일 프레임 모델)
+                if sequence_2d.shape[0] > 1:
+                    sequence_2d = sequence_2d[-1:]
+                
+                # ML 모델 예측 (coordinate regression)
+                predictions = self.model.predict(sequence_2d)
+                
+                # ML 모델 출력: (n_samples, 2) - [x, y] 좌표
+                # DL 모델 형식으로 변환: [labels, values]
+                if len(predictions.shape) == 1:
+                    predictions = predictions.reshape(1, -1)
+                
+                # DL 모델 형식으로 변환 (labels는 confidence, values는 좌표)
+                # ML 모델은 coordinate regression이므로 직접 좌표 반환
+                pred_labels = np.ones((1, 2)) * 0.8  # confidence (임시)
+                pred_values = predictions  # (1, 2) - [x, y]
+                
+                predictions = [pred_labels, pred_values]
+            else:
+                # DL 모델: 기존 방식
+                predictions = self.model.predict(sequence, verbose=0, batch_size=1)
             
             self.inference_count += 1
             
@@ -578,7 +964,33 @@ class ARPhoneInterface:
                 result['labels'] = pred_labels
                 result['values'] = pred_values
                 
-                # Multi-label에서 활성화된 이벤트 추출
+                # ML 모델인 경우: coordinate regression 직접 처리
+                is_ml_model = self.model_path.endswith('.pkl') if hasattr(self, 'model_path') else False
+                
+                if is_ml_model:
+                    # ML 모델: pred_values는 [x, y] 좌표 (coordinate regression)
+                    # train_gesture/realtime_inference.py와 동일한 형식으로 변환
+                    if len(pred_values) >= 2:
+                        x_coord_transformed = float(pred_values[0])
+                        y_coord_transformed = float(pred_values[1])
+                        
+                        # Target 역변환 적용 (변환이 사용된 경우)
+                        target_transform = self.preprocessor_config.get('target_transform', {'type': None})
+                        if target_transform and target_transform.get('type') not in [None, 'none']:
+                            # 역변환 로직 (필요시 구현)
+                            x_coord = int(x_coord_transformed)
+                            y_coord = int(y_coord_transformed)
+                        else:
+                            x_coord = int(x_coord_transformed)
+                            y_coord = int(y_coord_transformed)
+                        
+                        # train_gesture/realtime_inference.py와 동일한 형식으로 반환
+                        result['coords'] = [x_coord, y_coord]
+                        result['touch_start'] = True  # touch detection은 이미 수행됨
+                    
+                    return result
+                
+                # DL 모델: Multi-label에서 활성화된 이벤트 추출
                 type_code_pairs = self.preprocessor_config.get('type_code_pairs', [])
                 label_threshold = self.preprocessor_config.get('label_threshold', 0.5)
                 
@@ -675,8 +1087,20 @@ class ARPhoneInterface:
             return {}
     
     def _execute_prediction(self, predictions: Dict, hand_features: Optional[np.ndarray] = None) -> bool:
-        """예측 결과를 Android 제어로 실행"""
+        """예측 결과를 Android 제어로 실행 (train_gesture/realtime_inference.py와 동일한 로직)
+        
+        X, Y 좌표 regression 방식:
+        - Touch 상태 변화에 따른 swipe 처리
+        - 0 → 1: Swipe 시작 (좌표를 버퍼에 저장)
+        - 1 → 1: Swipe 계속 (좌표를 버퍼에 추가하고 즉시 swipe 전송)
+        - 1 → 0: Swipe 종료 (버퍼의 좌표로 tap 또는 swipe 실행)
+        """
         try:
+            # Coordinate regression 방식 (train_gesture/realtime_inference.py와 동일)
+            if 'coords' in predictions:
+                return self._execute_coordinate_prediction(predictions)
+            
+            # 기존 Multi-label 방식 (하위 호환성)
             if 'events' not in predictions or len(predictions['events']) == 0:
                 return False
             
@@ -704,7 +1128,7 @@ class ARPhoneInterface:
                 except Exception as e:
                     self.logger.debug(f"Pattern analysis error: {e}")
             
-            # Android 이벤트 형식으로 변환 (train_gesture/realtime_inference.py의 _process_events_with_swipe_detection 로직 사용)
+            # Android 이벤트 형식으로 변환
             android_events = self._process_events_with_swipe_detection(
                 events_list,
                 force_swipe=(
@@ -723,7 +1147,6 @@ class ARPhoneInterface:
             
             # Android 제어 실행
             if self.android_controller and self.android_controller.is_connected:
-                # Android 이벤트 로그 출력 (run_realtime_system.py처럼)
                 coordinate_info = ""
                 if android_events:
                     x_events = [e for e in android_events if e[1] == '0035']
@@ -735,9 +1158,8 @@ class ARPhoneInterface:
                 
                 self.logger.info(f"🔮 Prediction #{self.inference_count}: {len(android_events)} events{coordinate_info}")
                 
-                # Android 이벤트 상세 로그 (DEBUG 레벨)
                 if self.logger.isEnabledFor(logging.DEBUG):
-                    for i, event in enumerate(android_events[:10]):  # 처음 10개만
+                    for i, event in enumerate(android_events[:10]):
                         event_type, event_code, value_hex = event
                         value_int = int(value_hex, 16)
                         event_name = self._get_event_name(event_type, event_code)
@@ -749,6 +1171,146 @@ class ARPhoneInterface:
             
         except Exception as e:
             self.logger.error(f"예측 실행 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def _execute_coordinate_prediction(self, predictions: Dict) -> bool:
+        """Coordinate regression 방식 예측 실행 (train_gesture/realtime_inference.py와 동일한 로직)"""
+        try:
+            # Touch detection 확인
+            touch_start = predictions.get('touch_start', True)  # 기본값 True
+            current_touch_state = touch_start
+            
+            # Touch 상태 변화 확인
+            touch_state_changed = False
+            if self.last_touch_state is not None:
+                touch_state_changed = (self.last_touch_state != current_touch_state)
+            
+            # 좌표가 없을 때 처리
+            if 'coords' not in predictions or predictions['coords'] is None:
+                # Touch 상태가 1 → 0으로 바뀌었는데 좌표가 없으면 이전 버퍼로 처리
+                if touch_state_changed and self.last_touch_state and not current_touch_state:
+                    if self.swipe_in_progress:
+                        # 0 → 1 → 0 패턴: 버퍼에 좌표가 1개만 있으면 tap 실행
+                        if len(self.swipe_coords_buffer) == 1:
+                            tap_coord = self.swipe_coords_buffer[0]
+                            android_events = [('TAP', tap_coord[0], tap_coord[1])]
+                            if self.android_controller and self.android_controller.is_connected:
+                                self.android_controller.send_event_sequence(android_events, delay=0.001)
+                        
+                        # Swipe 상태 초기화
+                        self.swipe_in_progress = False
+                        self.swipe_coords_buffer = []
+                
+                # Touch 상태 업데이트
+                self.last_touch_state = current_touch_state
+                return False
+            
+            x_coord, y_coord = predictions['coords']
+            current_coord = (int(x_coord), int(y_coord))
+            
+            # Touch 상태 변화에 따른 처리
+            if touch_state_changed:
+                if not self.last_touch_state and current_touch_state:
+                    # 0 → 1: Swipe 시작
+                    self.swipe_in_progress = True
+                    self.swipe_coords_buffer = [current_coord]
+                    self.logger.info(f"🔮 Swipe START: ({x_coord}, {y_coord})")
+                    # Swipe 시작 시점에는 명령어 전송하지 않음 (좌표만 저장)
+                    
+                elif self.last_touch_state and not current_touch_state:
+                    # 1 → 0: Swipe 종료 또는 Tap
+                    if self.swipe_in_progress:
+                        # 0 → 1 → 0 패턴: 1에서 받았던 좌표로 tap 실행
+                        result = False
+                        if len(self.swipe_coords_buffer) == 1:
+                            tap_coord = self.swipe_coords_buffer[0]
+                            android_events = [('TAP', tap_coord[0], tap_coord[1])]
+                            if self.android_controller and self.android_controller.is_connected:
+                                result = self.android_controller.send_event_sequence(android_events, delay=0.001)
+                        else:
+                            # 버퍼에 좌표가 2개 이상이면 (0 → 1 → 1 → 0 패턴)
+                            # 1 → 1에서 이미 swipe를 보냈으므로, 1 → 0에서는 swipe를 보내지 않고 상태만 초기화
+                            result = True
+                        
+                        # Swipe 상태 초기화
+                        self.swipe_in_progress = False
+                        self.swipe_coords_buffer = []
+                        
+                        # 이전 예측 결과 저장
+                        self.last_prediction_events = [{
+                            'coords': [x_coord, y_coord],
+                            'touch_start': touch_start
+                        }]
+                        self.last_touch_state = current_touch_state
+                        return result
+                    else:
+                        # Swipe가 진행 중이 아니었으면 그냥 종료
+                        self.swipe_in_progress = False
+                        self.swipe_coords_buffer = []
+            else:
+                # Touch 상태 변화 없음
+                if current_touch_state:
+                    # 1 → 1: Swipe 계속 (즉시 swipe 명령어 전송)
+                    if self.swipe_in_progress:
+                        # 이전 좌표 가져오기
+                        if len(self.swipe_coords_buffer) > 0:
+                            last_coord = self.swipe_coords_buffer[-1]
+                        elif self.last_prediction_events and len(self.last_prediction_events) > 0:
+                            last_coords = self.last_prediction_events[0].get('coords')
+                            if last_coords:
+                                last_coord = (int(last_coords[0]), int(last_coords[1]))
+                            else:
+                                last_coord = current_coord
+                        else:
+                            last_coord = current_coord
+                        
+                        # 버퍼에 현재 좌표 추가
+                        self.swipe_coords_buffer.append(current_coord)
+                        
+                        # 버퍼가 너무 길어지면 오래된 좌표 제거
+                        max_buffer_size = 10
+                        if len(self.swipe_coords_buffer) > max_buffer_size:
+                            self.swipe_coords_buffer = self.swipe_coords_buffer[-max_buffer_size:]
+                        
+                        # 이전 좌표 → 현재 좌표로 즉시 swipe 명령어 전송
+                        android_events = [('SWIPE', last_coord[0], last_coord[1], 
+                                         current_coord[0], current_coord[1], self.swipe_duration_ms)]
+                        self.logger.info(f"🔮 Swipe CONTINUE: ({last_coord[0]}, {last_coord[1]}) → ({current_coord[0]}, {current_coord[1]}) (duration: {self.swipe_duration_ms}ms)")
+                        result = False
+                        if self.android_controller and self.android_controller.is_connected:
+                            result = self.android_controller.send_event_sequence(android_events, delay=0.001)
+                        
+                        # 이전 예측 결과 저장
+                        self.last_prediction_events = [{
+                            'coords': [x_coord, y_coord],
+                            'touch_start': touch_start
+                        }]
+                        self.last_touch_state = current_touch_state
+                        return result
+                    else:
+                        # Swipe가 진행 중이 아니었는데 touch가 True면 시작 (저장만)
+                        self.swipe_in_progress = True
+                        self.swipe_coords_buffer = [current_coord]
+                        self.logger.info(f"🔮 Swipe START: ({x_coord}, {y_coord})")
+                else:
+                    # 0 → 0: 터치 없음, 아무것도 하지 않음
+                    self.last_touch_state = current_touch_state
+                    return False
+            
+            # 이전 예측 결과 저장 (0 → 1인 경우)
+            self.last_prediction_events = [{
+                'coords': [x_coord, y_coord],
+                'touch_start': touch_start
+            }]
+            self.last_touch_state = current_touch_state
+            
+            # 0 → 1인 경우: 좌표만 저장하고 명령어 전송 안 함
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Coordinate prediction execution error: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -1430,12 +1992,12 @@ def main():
                        default='auto', help='카메라 타입')
     parser.add_argument('--debug', action='store_true',
                        help='디버그 모드')
-    parser.add_argument('--model-path', type=str, required=True,
-                       help='모델 파일 경로 (예: ../train_gesture/train/models/basic_lstm_20251103_212301.h5)')
+    parser.add_argument('--model-path', type=str, default=None,
+                       help='모델 파일 경로 (지정하지 않으면 최고 성능 모델 자동 선택)')
     parser.add_argument('--session-id', type=str, default='optimized_session_20251102',
                        help='세션 ID')
     parser.add_argument('--use-thumb-only', action='store_true', default=True,
-                       help='엄지 관절만 사용')
+                       help='엄지 관절만 사용 (항상 True로 고정)')
     parser.add_argument('--use-pattern-analysis', action='store_true', default=True,
                        help='패턴 분석 사용 (DTW + Cosine Similarity)')
     parser.add_argument('--show-camera-gui', action='store_true', default=True,
@@ -1457,7 +2019,8 @@ def main():
     config.set('debug', args.debug)
     config.set('model_path', args.model_path)
     config.set('session_id', args.session_id)
-    config.set('use_thumb_only', args.use_thumb_only)
+    # use_thumb_only는 항상 True로 고정
+    config.set('use_thumb_only', True)
     config.set('use_pattern_analysis', args.use_pattern_analysis)
     config.set('show_camera_gui', show_camera_gui)
     

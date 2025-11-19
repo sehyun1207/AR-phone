@@ -659,17 +659,40 @@ class AndroidController:
             logger.error(f"Error executing ADB command: {e}")
             return False
     
-    def send_event_sequence(self, events: List[Tuple[str, str, str]], 
+    def send_event_sequence(self, events: List, 
                            device: str = "/dev/input/event4",
                            delay: float = 0.001) -> bool:
         """
         이벤트 시퀀스 전송
-        sendevent 실패 시 자동으로 high-level 명령어로 변환
+        TAP/SWIPE 이벤트는 "adb shell input" 명령어로 변환하여 전송
+        기존 이벤트 형식은 sendevent로 시도 후 high-level 명령어로 변환
+        
+        Args:
+            events: [(type, code, value), ...] 또는 [('TAP', x, y), ...] 또는 [('SWIPE', x1, y1, x2, y2, duration_ms), ...] 리스트
+            device: 입력 디바이스 경로
+            delay: 각 이벤트 사이의 지연 시간 (초)
         """
         if not self.is_connected:
             logger.error("Android device not connected")
             return False
         
+        # TAP 또는 SWIPE 이벤트가 있으면 "adb shell input" 명령어 사용 (train_gesture/android_control.py와 동일)
+        for event in events:
+            if isinstance(event, tuple) and len(event) > 0:
+                if event[0] == 'TAP' and len(event) == 3:
+                    # TAP 이벤트: ('TAP', x, y)
+                    x, y = event[1], event[2]
+                    command = f"input tap {x} {y}"
+                    return self._execute_adb_input_command(command)
+                elif event[0] == 'SWIPE' and len(event) >= 5:
+                    # SWIPE 이벤트: ('SWIPE', x1, y1, x2, y2) 또는 ('SWIPE', x1, y1, x2, y2, duration_ms)
+                    x1, y1, x2, y2 = event[1], event[2], event[3], event[4]
+                    # Swipe duration in milliseconds (기본값 300ms, 이벤트에 포함되어 있으면 사용)
+                    duration = event[5] if len(event) > 5 else 300
+                    command = f"input swipe {x1} {y1} {x2} {y2} {duration}"
+                    return self._execute_adb_input_command(command)
+        
+        # 기존 이벤트 형식 처리 (하위 호환성)
         # 먼저 sendevent로 시도
         if not self.use_high_level:
             success = True
