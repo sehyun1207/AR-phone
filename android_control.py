@@ -644,19 +644,40 @@ class AndroidController:
             if self.device_id:
                 cmd = ["adb", "-s", self.device_id, "shell"] + command.split()[1:]
             
-            logger.info(f"📱 Android Command: {command}")
+            # 최종 실행 명령어 로그 출력 (device_id 포함)
+            full_command = " ".join(cmd)
+            logger.info("=" * 80)
+            logger.info(f"📱 SENDING ANDROID COMMAND")
+            logger.info(f"   Command: {command}")
+            logger.info(f"   Full ADB command: {full_command}")
+            if self.device_id:
+                logger.info(f"   Device ID: {self.device_id}")
+            logger.info("=" * 80)
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             
             if result.returncode == 0:
-                logger.debug(f"ADB command successful: {command}")
+                logger.info(f"✅ Android command SUCCESS: {command}")
+                if result.stdout:
+                    logger.debug(f"   Output: {result.stdout}")
                 return True
             else:
-                logger.error(f"ADB command failed: {command}, error: {result.stderr}")
+                logger.error(f"❌ Android command FAILED: {command}")
+                logger.error(f"   Return code: {result.returncode}")
+                if result.stderr:
+                    logger.error(f"   Error: {result.stderr}")
+                if result.stdout:
+                    logger.error(f"   Output: {result.stdout}")
                 return False
                 
+        except subprocess.TimeoutExpired:
+            logger.error(f"⏱️ Android command TIMEOUT: {command} (5초 초과)")
+            return False
         except Exception as e:
-            logger.error(f"Error executing ADB command: {e}")
+            logger.error(f"❌ Error executing Android command: {command}")
+            logger.error(f"   Exception: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
     
     def send_event_sequence(self, events: List, 
@@ -683,6 +704,7 @@ class AndroidController:
                     # TAP 이벤트: ('TAP', x, y)
                     x, y = event[1], event[2]
                     command = f"input tap {x} {y}"
+                    logger.info(f"🎯 TAP event detected: ({x}, {y})")
                     return self._execute_adb_input_command(command)
                 elif event[0] == 'SWIPE' and len(event) >= 5:
                     # SWIPE 이벤트: ('SWIPE', x1, y1, x2, y2) 또는 ('SWIPE', x1, y1, x2, y2, duration_ms)
@@ -690,6 +712,7 @@ class AndroidController:
                     # Swipe duration in milliseconds (기본값 300ms, 이벤트에 포함되어 있으면 사용)
                     duration = event[5] if len(event) > 5 else 300
                     command = f"input swipe {x1} {y1} {x2} {y2} {duration}"
+                    logger.info(f"👆 SWIPE event detected: ({x1}, {y1}) → ({x2}, {y2}), duration={duration}ms")
                     return self._execute_adb_input_command(command)
         
         # 기존 이벤트 형식 처리 (하위 호환성)
