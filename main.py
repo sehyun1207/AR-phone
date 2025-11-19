@@ -199,45 +199,40 @@ class ARPhoneInterface:
         """모델 및 전처리 설정 로드"""
         try:
             from pathlib import Path
-            import shutil
             
-            # 고정된 최고 성능 모델 경로
+            # AR-phone 기준 경로
             base_dir = Path(__file__).parent
-            train_gesture_dir = base_dir.parent / "train_gesture"
+            models_dir = base_dir / "models"
+            models_dir.mkdir(exist_ok=True)
             
-            # Best coordinate model 경로
-            best_coordinate_model = train_gesture_dir / "train" / "models" / "random_forest_coordinate_20251117_091207.pkl"
-            # Best touch model 경로
-            best_touch_model = train_gesture_dir / "train" / "models" / "touch_detection_random-forest_20251112_201232.pkl"
+            # 고정된 최고 성능 모델 파일명
+            coordinate_model_name = "random_forest_coordinate_20251117_091207.pkl"
+            touch_model_name = "touch_detection_random-forest_20251112_201232.pkl"
             
             # 모델 경로가 지정되지 않았거나 기본값인 경우 고정 모델 사용
             # 사용자가 명시적으로 --model-path를 지정하지 않은 경우에만 고정 모델 사용
             if not self.model_path:
-                # AR-phone/models 디렉토리에 복사
-                models_dir = base_dir / "models"
-                models_dir.mkdir(exist_ok=True)
+                # AR-phone/models 디렉토리에서 직접 찾기
+                best_coordinate_model = models_dir / coordinate_model_name
+                best_touch_model = models_dir / touch_model_name
                 
-                # Coordinate model 복사
+                # Coordinate model 확인
                 if best_coordinate_model.exists():
-                    dest_coordinate = models_dir / best_coordinate_model.name
-                    if not dest_coordinate.exists():
-                        shutil.copy2(best_coordinate_model, dest_coordinate)
-                        self.logger.info(f"Copied coordinate model to: {dest_coordinate}")
-                    self.model_path = str(dest_coordinate)
+                    self.model_path = str(best_coordinate_model)
+                    self.logger.info(f"Using coordinate model: {self.model_path}")
                 else:
                     self.logger.error(f"Best coordinate model not found: {best_coordinate_model}")
+                    self.logger.error(f"  Expected location: {models_dir}")
                     return False
                 
-                # Touch model 복사
+                # Touch model 확인
                 if best_touch_model.exists():
-                    dest_touch = models_dir / best_touch_model.name
-                    if not dest_touch.exists():
-                        shutil.copy2(best_touch_model, dest_touch)
-                        self.logger.info(f"Copied touch model to: {dest_touch}")
-                    self.touch_model_path = str(dest_touch)
+                    self.touch_model_path = str(best_touch_model)
                     self.config.set('touch_model_path', self.touch_model_path)
+                    self.logger.info(f"Using touch model: {self.touch_model_path}")
                 else:
                     self.logger.warning(f"Best touch model not found: {best_touch_model}")
+                    self.logger.warning(f"  Expected location: {models_dir}")
                     self.touch_model_path = None
                 
                 # 고정된 preprocessing 설정 (최고 성능 모델의 설정)
@@ -276,27 +271,8 @@ class ARPhoneInterface:
                     except Exception as e:
                         self.logger.warning(f"Failed to load scaler from {scaler_path}: {e}")
                 else:
-                    # train_gesture/train/models 디렉토리에서도 시도
-                    train_gesture_scaler_path = train_gesture_dir / "train" / "models" / f"{model_name}_scaler.pkl"
-                    if train_gesture_scaler_path.exists():
-                        try:
-                            import pickle
-                            with open(train_gesture_scaler_path, 'rb') as f:
-                                scaler = pickle.load(f)
-                            if hasattr(scaler, 'mean_') and scaler.mean_ is not None:
-                                self.preprocessor_config['scaler'] = scaler
-                                # AR-phone/models에도 복사
-                                import shutil
-                                shutil.copy2(train_gesture_scaler_path, scaler_path)
-                                self.logger.info(f"✅ Loaded scaler from: {train_gesture_scaler_path}")
-                                self.logger.info(f"   Copied to: {scaler_path}")
-                                self.logger.info(f"   Scaler feature count: {len(scaler.mean_)}")
-                        except Exception as e:
-                            self.logger.warning(f"Failed to load scaler from {train_gesture_scaler_path}: {e}")
-                    else:
-                        self.logger.warning(f"Scaler file not found: {scaler_path}")
-                        self.logger.warning(f"  Also checked: {train_gesture_scaler_path}")
-                        self.logger.warning("  Will use features without normalization")
+                    self.logger.warning(f"Scaler file not found: {scaler_path}")
+                    self.logger.warning("  Will use features without normalization")
                 
                 # Touch threshold 고정
                 self.touch_threshold = 0.85
@@ -332,35 +308,25 @@ class ARPhoneInterface:
             if config_dir:
                 config_dir = os.path.abspath(config_dir)
             
-            # session_id와 data_dir 가져오기 (scaler fit을 위해 - train_gesture 방식)
-            # 고정된 모델의 session_ids 사용
+            # session_id와 data_dir 가져오기 (scaler fit을 위해 - 사용하지 않음, scaler는 파일에서 로드)
+            # 고정된 모델의 session_ids (참고용, 실제로는 사용하지 않음)
             session_ids = [
                 "optimized_session_1762580384",
                 "optimized_session_1762671648",
                 "optimized_session_1762676322",
                 "optimized_session_1763190152"
             ]
-            session_id = session_ids[0]  # 첫 번째 세션을 기본값으로
+            session_id = session_ids[0]  # 첫 번째 세션을 기본값으로 (호환성 유지용)
             
-            # 데이터 디렉토리 경로 (train_gesture 경로 우선)
+            # 데이터 디렉토리 경로 (AR-phone 기준)
             from pathlib import Path
             base_dir = Path(__file__).parent
             data_dir = None
             
-            # train_gesture 경로 시도
-            train_gesture_data_dir = str(base_dir.parent / "train_gesture" / "train" / "data" / "processed")
-            if os.path.exists(train_gesture_data_dir):
-                data_dir = train_gesture_data_dir
-            else:
-                # AR-phone 내부 데이터 디렉토리 확인
-                ar_phone_data_dir = str(base_dir / "data" / "processed")
-                if os.path.exists(ar_phone_data_dir):
-                    data_dir = ar_phone_data_dir
-                else:
-                    # 상대 경로로도 시도
-                    train_gesture_data_dir = str(base_dir.parent / "train_gesture" / "data" / "processed")
-                    if os.path.exists(train_gesture_data_dir):
-                        data_dir = train_gesture_data_dir
+            # AR-phone 내부 데이터 디렉토리 확인
+            ar_phone_data_dir = str(base_dir / "data" / "processed")
+            if os.path.exists(ar_phone_data_dir):
+                data_dir = ar_phone_data_dir
             
             # Preprocessor config가 이미 설정되어 있으면 그대로 사용, 없으면 로드
             if not hasattr(self, 'preprocessor_config') or not self.preprocessor_config:

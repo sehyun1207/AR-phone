@@ -70,6 +70,7 @@ def load_model_config(model_path: str, config_dir: Optional[str] = None) -> Dict
     
     # Scaler 파일 로드 시도 (모델명_scaler.pkl 형식)
     # 예: random_forest_coordinate_20251117_091207_scaler.pkl
+    # AR-phone/models 디렉토리 기준으로만 검색
     model_base_name = model_name
     scaler_paths = [
         os.path.join(config_dir, f"{model_base_name}_scaler.pkl") if config_dir else None,
@@ -78,15 +79,6 @@ def load_model_config(model_path: str, config_dir: Optional[str] = None) -> Dict
         os.path.join(model_dir, "scaler.pkl"),
         os.path.join(model_dir, "preprocessor_config.pkl"),
     ]
-    
-    # 추가 경로: train_gesture/train/models/ 디렉토리에서 찾기
-    train_models_dir = os.path.join(os.path.dirname(os.path.dirname(model_dir)), "train", "models")
-    if os.path.exists(train_models_dir):
-        scaler_paths.extend([
-            os.path.join(train_models_dir, f"{model_base_name}_scaler.pkl"),
-            os.path.join(train_models_dir, "scaler.pkl"),
-            os.path.join(train_models_dir, "preprocessor_config.pkl"),
-        ])
     
     for scaler_path in scaler_paths:
         if scaler_path and os.path.exists(scaler_path):
@@ -111,8 +103,12 @@ def load_model_config(model_path: str, config_dir: Optional[str] = None) -> Dict
             except Exception as e:
                 logger.warning(f"Failed to load scaler from {scaler_path}: {e}")
     
-    # training_results.json에서 정보 찾기 시도
-    results_dir = os.path.join(os.path.dirname(model_dir), "..", "results")
+    # training_results.json에서 정보 찾기 시도 (AR-phone 기준)
+    # AR-phone/results 또는 AR-phone/models/results 디렉토리에서 찾기
+    results_dir = os.path.join(model_dir, "results")
+    if not os.path.exists(results_dir):
+        # 상위 디렉토리의 results 시도
+        results_dir = os.path.join(os.path.dirname(model_dir), "results")
     results_dir = os.path.abspath(results_dir)
     if os.path.exists(results_dir):
         for filename in os.listdir(results_dir):
@@ -347,7 +343,7 @@ def _fit_scaler_from_training_data(
     
     Args:
         session_id: 세션 ID
-        data_dir: 데이터 디렉토리 (train_gesture/data/processed)
+        data_dir: 데이터 디렉토리 (AR-phone/data/processed 또는 외부 경로)
         sequence_length: 시퀀스 길이 (사용 안 함, 호환성 유지용)
         use_thumb_only: 엄지 관절만 사용 여부
     
@@ -373,7 +369,7 @@ def _fit_scaler_from_training_data(
             logger.warning("Hand data is empty")
             return None
         
-        # Hand feature 추출 (train_gesture의 extract_hand_features 로직)
+        # Hand feature 추출
         hand_features = _extract_hand_features_from_df(hand_df, use_thumb_only=use_thumb_only)
         
         if hand_features is None or hand_features.size == 0:
@@ -410,7 +406,7 @@ def _fit_scaler_from_training_data(
 
 def _extract_hand_features_from_df(hand_df: 'pd.DataFrame', use_thumb_only: bool = True) -> Optional[np.ndarray]:
     """
-    Hand DataFrame에서 feature 추출 (train_gesture 로직)
+    Hand DataFrame에서 feature 추출
     
     Args:
         hand_df: Hand 데이터 DataFrame
