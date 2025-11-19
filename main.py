@@ -61,7 +61,7 @@ class ARPhoneInterface:
         self.preprocessor_config = {}
         self.label_encoders = {}
         self.scaler = None
-        self.touch_model_path = self.config.get('touch_model_path', None)
+        self.touch_model_path = "/home/sehyun/ar_phone/models/touch_detection_random-forest_20251112_201232.pkl"
         # Touch threshold 고정: 0.85
         self.touch_threshold = 0.85
         self.touch_model = None
@@ -1992,7 +1992,7 @@ def main():
                        default='auto', help='카메라 타입')
     parser.add_argument('--debug', action='store_true',
                        help='디버그 모드')
-    parser.add_argument('--model-path', type=str, default=None,
+    parser.add_argument('--model-path', type=str, default="/home/sehyun/ar_phone/models/random_forest_coordinate_20251117_091207.pkl",
                        help='모델 파일 경로 (지정하지 않으면 최고 성능 모델 자동 선택)')
     parser.add_argument('--session-id', type=str, default='optimized_session_20251102',
                        help='세션 ID')
