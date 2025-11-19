@@ -182,7 +182,8 @@ class ARPhoneInterface:
             
             # Android 미러링 초기화
             if not self._initialize_phone_mirroring():
-                self.logger.warning("Android 미러링 초기화 실패 - 오프라인 모드로 계속 실행")
+                self.logger.error("Android 미러링 초기화 실패")
+                return False  # test_android_mirror.py와 동일: 초기화 실패 시 종료
             
             self.is_initialized = True
             self.logger.info("초기화 완료")
@@ -578,28 +579,32 @@ class ARPhoneInterface:
             self.use_touch_detection = False
     
     def _initialize_phone_mirroring(self) -> bool:
-        """Android 스마트폰 미러링 초기화"""
+        """Android 스마트폰 미러링 초기화 (test_android_mirror.py와 동일한 방식)"""
         try:
             self.logger.info("Android 스마트폰 미러링 초기화 중...")
             
+            # Android 연결 확인 (test_android_mirror.py와 동일)
             if not self.phone_mirror.is_connected():
                 self.logger.warning("Android 디바이스가 연결되지 않았습니다")
-                return True  # 미러링 실패해도 계속 실행
+                self.logger.warning("adb devices 명령어로 연결 상태를 확인하세요")
+                return False  # test_android_mirror.py와 동일: 초기화 실패
             
-            success = self.phone_mirror.start_mirroring(
-                callback=self._phone_frame_callback
-            )
+            self.logger.info("Android 디바이스 연결 확인됨")
             
-            if success:
-                self.logger.info("Android 스마트폰 미러링 시작 완료")
-            else:
-                self.logger.warning("Android 스마트폰 미러링 시작 실패 - 오프라인 모드로 실행")
+            # Android 미러링 시작 (test_android_mirror.py와 동일)
+            if not self.phone_mirror.start_mirroring(callback=self._phone_frame_callback):
+                self.logger.error("Android 미러링 시작 실패")
+                return False  # test_android_mirror.py와 동일: 초기화 실패
+            
+            self.logger.info("Android 스마트폰 미러링 시작 완료")
             
             return True
             
         except Exception as e:
             self.logger.error(f"Android 스마트폰 미러링 초기화 오류: {e}")
-            return True
+            import traceback
+            traceback.print_exc()
+            return False  # test_android_mirror.py와 동일: 초기화 실패
     
     def start(self):
         """시스템 시작"""
