@@ -1,185 +1,210 @@
-# AR Phone Interface - Android 전용
+# AR Phone Interface - Android Only
 
-라즈베리파이 4를 사용한 제스처 기반 AR Android 스마트폰 인터페이스
+Gesture-based AR Android smartphone interface using Raspberry Pi 4
 
-## 📱 프로젝트 개요
+---
 
-이 프로젝트는 라즈베리파이 4를 사용하여 손 제스처로 Android 스마트폰을 조작하는 AR(증강현실) 인터페이스를 구현합니다. 투명한 스마트폰 화면이 눈 앞에 떠 있는 것처럼 보이게 하고, 손 동작으로 직관적으로 조작할 수 있습니다.
+![AR demo](assets/KakaoTalk_20251118_083449212_02.jpg)
+![AR demo](assets/KakaoTalk_20251118_083449212_03.jpg)
 
-## 🎯 주요 기능
+## Why I Built This
 
-- **실시간 Android 미러링**: scrcpy를 통한 고품질 화면 미러링
-- **완전한 제어 기능**: 터치, 스와이프, 키 입력, 텍스트 입력 지원
-- **손 제스처 인식**: MediaPipe 기반 정확한 손 동작 감지
-- **AR 디스플레이**: LCD와 거울을 활용한 AR 효과
-- **직관적 제어**: 자연스러운 손 동작으로 Android 스마트폰 조작
+Most of what makes a person productive — the way they navigate a phone, the gestures they reach for instinctively, the micro-decisions they make without thinking — is tacit knowledge. It lives in muscle memory and habit, not in any document or dataset.
 
-## 🛠️ 하드웨어 요구사항
+This project is an attempt to change that. By instrumenting everyday smartphone interaction through an AR interface, I wanted to capture personal usage patterns as structured, machine-learnable data. Every gesture, tap, swipe, and navigation sequence becomes a data point. Over time, that stream of behavioral data can be used to model individual habits, predict intent, and ultimately train a system that understands how a specific person uses their phone — not how the average user does.
 
-### 필수 구성요소
-- **라즈베리파이 4** (4GB RAM 권장)
-- **카메라 모듈**: Pi Camera v2 또는 USB 웹캠
-- **LCD 디스플레이**: 7인치 터치스크린 (800x480 이상)
-- **거울**: 반투명 거울 (AR 효과용)
-- **렌즈**: 불투명 렌즈 (화면 투영용)
+The AR phone is the collection mechanism. The real goal is turning embodied, habitual behavior into something a machine can learn from.
 
-### 선택적 구성요소
-- **마이크**: 음성 명령용
-- **스피커**: 피드백 사운드용
-- **LED**: 상태 표시용
+---
 
-## 💻 소프트웨어 요구사항
+## Project Overview
 
-- **OS**: 라즈베리파이 OS (64-bit)
-- **Python**: 3.8 이상
-- **Android**: scrcpy, ADB
-- **Android 디바이스**: USB 디버깅 활성화 필요
+This project implements an AR (Augmented Reality) interface using Raspberry Pi 4 that allows users to control an Android smartphone through hand gestures. It creates the visual effect of a transparent smartphone screen floating in front of the user, controllable through natural hand movements.
 
-## 🚀 설치 방법
+## Key Features
 
-### 1. 자동 설치 (권장)
+- Real-time Android mirroring via scrcpy with high-quality output
+- Full control support including touch, swipe, key input, and text input
+- Hand gesture recognition powered by MediaPipe
+- AR display using LCD and mirror optics
+- Intuitive control through natural hand movements
+
+## Hardware Requirements
+
+### Required Components
+- Raspberry Pi 4 (4GB RAM recommended)
+- Camera module: Pi Camera v2 (recommended) or USB webcam
+- LCD display: 7-inch touchscreen (800x480 or higher)
+- Mirror: semi-transparent mirror for AR effect
+- Lens: opaque lens for screen projection
+
+Camera selection guide:
+- Pi Camera v2: optimized performance via Picamera2 library, resolves buffer issues
+- USB webcam: uses OpenCV VideoCapture, excellent compatibility
+
+### Optional Components
+- Microphone for voice commands
+- Speaker for audio feedback
+- LED for status indication
+
+## Software Requirements
+
+- OS: Raspberry Pi OS (64-bit)
+- Python: 3.8 or higher
+- Camera library: Picamera2 (Pi Camera v2) or OpenCV (USB webcam)
+- Android: scrcpy, ADB
+- Android device with USB debugging enabled
+
+## Installation
+
+### 1. Automatic Installation (Recommended)
 ```bash
-# 저장소 클론
+# Clone the repository
 git clone <repository-url>
 cd ar_phone
 
-# 설치 스크립트 실행
+# Run the setup script
 chmod +x setup.sh
 ./setup.sh
 ```
 
-### 2. 수동 설치
+### 2. Manual Installation
 ```bash
-# 시스템 업데이트
+# Update system
 sudo apt update && sudo apt upgrade -y
 
-# 필수 패키지 설치
+# Install required packages
 sudo apt install -y python3 python3-pip python3-venv opencv-python
 
-# Python 가상환경 생성
+# Create Python virtual environment
 python3 -m venv ar_phone_env
 source ar_phone_env/bin/activate
 
-# 의존성 설치
+# Install dependencies
 pip install -r requirements.txt
 
-# scrcpy 설치 (Android용)
+# Install scrcpy for Android
 sudo apt install -y scrcpy adb
 ```
 
-### 3. 라즈베리파이 설정
+### 3. Raspberry Pi Configuration
 ```bash
-# 카메라 모듈 활성화
+# Enable camera module
 sudo raspi-config
 # Interface Options > Camera > Enable
 
-# I2C/SPI 활성화 (LCD용)
+# Enable I2C/SPI for LCD
 sudo raspi-config
 # Interface Options > I2C > Enable
 # Interface Options > SPI > Enable
 ```
 
-## 🎮 제스처 컨트롤
+## Gesture Controls
 
-| 제스처 | 동작 | 설명 |
-|--------|------|------|
-| 👆 **포인팅** | 마우스 커서 | 검지를 펴고 움직여 커서 이동 |
-| ✊ **그랩** | 클릭/드래그 | 주먹을 쥐고 움직여 클릭 또는 드래그 |
-| 👌 **핀치** | 줌 인/아웃 | 엄지와 검지로 핀치하여 줌 조절 |
-| 👋 **흔들기** | 뒤로가기 | 손을 좌우로 흔들어 뒤로가기 |
-| ✋ **손바닥** | 홈 버튼 | 손바닥을 보여 홈 화면으로 이동 |
+| Gesture | Action | Description |
+|---------|--------|-------------|
+| Pointing | Mouse cursor | Extend index finger and move to control cursor |
+| Grab | Click/Drag | Make a fist and move to click or drag |
+| Pinch | Zoom in/out | Pinch thumb and index finger to adjust zoom |
+| Wave | Back | Wave hand left/right to go back |
+| Open palm | Home button | Show palm to return to home screen |
 
-## 🏗️ 프로젝트 구조
+## Project Structure
 
 ```
 ar_phone/
-├── main.py                    # 메인 애플리케이션
-├── config.json               # 설정 파일
-├── requirements.txt          # Python 의존성
-├── setup.sh                 # 자동 설치 스크립트
-├── run.sh                   # 실행 스크립트
-├── test_components.py       # 컴포넌트 테스트
-├── phone_mirroring/         # Android 미러링 모듈
+├── main.py                    # Main application
+├── config.json               # Configuration file
+├── requirements.txt          # Python dependencies
+├── setup.sh                 # Automatic setup script
+├── run.sh                   # Run script
+├── test_components.py       # Component tests
+├── phone_mirroring/         # Android mirroring module
 │   ├── __init__.py
-│   └── android_mirror.py    # Android scrcpy 미러링
-├── hand_tracking/           # 손 제스처 인식 모듈
+│   └── android_mirror.py    # Android scrcpy mirroring
+├── hand_tracking/           # Hand gesture recognition module
 │   ├── __init__.py
-│   └── gesture_detector.py  # MediaPipe 기반 제스처 감지
-├── gesture_controls/        # 제스처 컨트롤 변환
+│   └── gesture_detector.py  # MediaPipe-based gesture detection
+├── gesture_controls/        # Gesture control mapping
 │   ├── __init__.py
-│   └── gesture_mapper.py    # 제스처를 스마트폰 조작으로 변환
-├── display_manager/         # 디스플레이 관리
+│   └── gesture_mapper.py    # Gesture to smartphone action mapping
+├── display_manager/         # Display management
 │   ├── __init__.py
-│   └── ar_display.py        # AR 디스플레이 및 오버레이
-└── utils/                   # 유틸리티 함수들
+│   └── ar_display.py        # AR display and overlay
+└── utils/                   # Utility functions
     ├── __init__.py
-    ├── config.py            # 설정 관리
-    └── logger.py            # 로깅 시스템
+    ├── config.py            # Configuration management
+    └── logger.py            # Logging system
 ```
 
-## 🎯 사용법
+## Usage
 
-### 기본 실행
+### Basic Execution
 ```bash
-# 가상환경 활성화
+# Activate virtual environment
 source ar_phone_env/bin/activate
 
-# 기본 실행
+# Run with automatic camera selection
 python main.py
 
-# 또는 실행 스크립트 사용
+# Force Pi Camera v2
+python main.py --camera-type picamera2
+
+# Force USB webcam
+python main.py --camera-type opencv
+
+# Or use the run script
 ./run.sh
 ```
 
-### 고급 옵션
+### Advanced Options
 ```bash
-# 특정 카메라 사용
+# Use a specific camera index
 python main.py --camera 1
 
-# 특정 Android 디바이스 지정 (여러 디바이스 연결 시)
-python main.py --device-id [디바이스_ID]
+# Specify Android device (when multiple devices are connected)
+python main.py --device-id [device_id]
 
-# LCD 디스플레이 모드
+# LCD display mode
 python main.py --display lcd
 
-# 디버그 모드
+# Debug mode
 python main.py --debug
 ```
 
-### Android 디바이스 연결
+### Android Device Setup
 ```bash
-# 1. Android 디바이스에서 USB 디버깅 활성화
-# 설정 > 개발자 옵션 > USB 디버깅 활성화
+# 1. Enable USB debugging on Android
+# Settings > Developer Options > USB Debugging
 
-# 2. 디바이스 연결 확인
+# 2. Verify device connection
 adb devices
 
-# 3. WiFi 연결 설정 (선택사항)
+# 3. Set up WiFi connection (optional)
 adb tcpip 5555
-adb connect [디바이스_IP]:5555
+adb connect [device_ip]:5555
 
-# 4. scrcpy 설치 확인
+# 4. Verify scrcpy installation
 scrcpy --version
 ```
 
-### 라즈베리파이 OS에서 scrcpy 설치 문제 해결
+### Fixing scrcpy Installation on Raspberry Pi OS
 
-라즈베리파이 OS에서는 기본 패키지 저장소에 scrcpy가 없어서 설치 오류가 발생할 수 있습니다.
+The default Raspberry Pi OS package repository may not include scrcpy, causing installation errors.
 
-#### 자동 설치 (권장)
+#### Automatic Installation (Recommended)
 ```bash
-# 전용 설치 스크립트 실행
 chmod +x install_scrcpy.sh
 ./install_scrcpy.sh
 ```
 
-#### 수동 설치
+#### Manual Installation
 ```bash
-# 1. 의존성 설치
+# 1. Install dependencies
 sudo apt update
 sudo apt install -y ffmpeg libsdl2-2.0-0 libavcodec58 libavformat58 libavutil56 libswresample3 libswscale5 libusb-1.0-0 wget tar
 
-# 2. scrcpy 다운로드 및 설치
+# 2. Download and install scrcpy
 cd /tmp
 wget https://github.com/Genymobile/scrcpy/releases/download/v2.7/scrcpy-linux-v2.7.tar.gz
 tar -xzf scrcpy-linux-v2.7.tar.gz
@@ -189,24 +214,24 @@ sudo cp scrcpy-server /usr/local/bin/
 sudo chmod +x /usr/local/bin/scrcpy
 sudo chmod +x /usr/local/bin/scrcpy-server
 
-# 3. 설치 확인
+# 3. Verify installation
 scrcpy --version
 ```
 
-#### 대안: snap을 통한 설치
+#### Alternative: Install via snap
 ```bash
-# snap 설치 (없는 경우)
+# Install snap if not present
 sudo apt install -y snapd
 sudo systemctl enable --now snapd.socket
 sudo ln -s /var/lib/snapd/snap /snap
 
-# scrcpy 설치
+# Install scrcpy
 sudo snap install scrcpy
 ```
 
-## ⚙️ 설정
+## Configuration
 
-`config.json` 파일에서 다양한 설정을 조정할 수 있습니다:
+Adjust settings in `config.json`:
 
 ```json
 {
@@ -223,113 +248,98 @@ sudo snap install scrcpy
 }
 ```
 
-## 🧪 테스트
-
-컴포넌트별 테스트를 실행할 수 있습니다:
+## Testing
 
 ```bash
-# 전체 컴포넌트 테스트
+# Run all component tests
 python test_components.py
 
-# Android 제어 기능 테스트
+# Test Android control features
 python test_android_control.py
 
-# 특정 테스트만 실행
+# Run specific tests
 python test_android_control.py --test adb
 python test_android_control.py --test scrcpy
 python test_android_control.py --test mirror
 
-# Android 디바이스 연결 테스트
+# Test Android device connection
 adb devices
 
-# scrcpy 테스트
+# Test scrcpy
 scrcpy --no-audio --max-fps=30
 ```
 
-## 🔧 문제 해결
+## Troubleshooting
 
-### 일반적인 문제들
+### Camera Not Detected
+```bash
+# Check camera module is enabled
+sudo raspi-config
+# For USB webcam, try a different index
+python main.py --camera 1
+```
 
-1. **카메라가 인식되지 않음**
-   ```bash
-   # 카메라 모듈 활성화 확인
-   sudo raspi-config
-   # USB 웹캠인 경우 다른 인덱스 시도
-   python main.py --camera 1
-   ```
+### Android Device Connection Failed
+```bash
+# Verify USB debugging is enabled
+adb devices
+# Reinstall ADB driver
+sudo apt reinstall android-tools-adb
+```
 
-2. **Android 디바이스 연결 실패**
-   ```bash
-   # USB 디버깅 활성화 확인
-   adb devices
-   # 드라이버 재설치
-   sudo apt reinstall android-tools-adb
-   ```
+### scrcpy Installation Failed (Raspberry Pi OS)
+```bash
+# Use the dedicated install script
+chmod +x install_scrcpy.sh
+./install_scrcpy.sh
 
-3. **scrcpy 설치 실패 (라즈베리파이 OS)**
-   ```bash
-   # 전용 설치 스크립트 사용
-   chmod +x install_scrcpy.sh
-   ./install_scrcpy.sh
-   
-   # 또는 수동 설치
-   cd /tmp
-   wget https://github.com/Genymobile/scrcpy/releases/download/v2.7/scrcpy-linux-v2.7.tar.gz
-   tar -xzf scrcpy-linux-v2.7.tar.gz
-   cd scrcpy-linux-v2.7
-   sudo cp scrcpy /usr/local/bin/
-   sudo cp scrcpy-server /usr/local/bin/
-   sudo chmod +x /usr/local/bin/scrcpy
-   sudo chmod +x /usr/local/bin/scrcpy-server
-   ```
+# Or install manually
+cd /tmp
+wget https://github.com/Genymobile/scrcpy/releases/download/v2.7/scrcpy-linux-v2.7.tar.gz
+tar -xzf scrcpy-linux-v2.7.tar.gz
+cd scrcpy-linux-v2.7
+sudo cp scrcpy /usr/local/bin/
+sudo cp scrcpy-server /usr/local/bin/
+sudo chmod +x /usr/local/bin/scrcpy
+sudo chmod +x /usr/local/bin/scrcpy-server
+```
 
-4. **Android 디바이스 연결 실패**
-   ```bash
-   # USB 디버깅 활성화 확인
-   adb devices
-   
-   # 드라이버 재설치
-   sudo apt reinstall android-tools-adb
-   
-   # Android 디바이스 상태 확인 (런타임에서 A 키)
-   ```
+### Performance Issues
+```bash
+# Increase GPU memory allocation
+sudo raspi-config
+# Advanced Options > Memory Split > 128
+```
 
-5. **성능 문제**
-   ```bash
-   # GPU 메모리 할당 증가
-   sudo raspi-config
-   # Advanced Options > Memory Split > 128
-   ```
+## Android Control Features
 
-## 📱 Android 제어 기능
+### Supported Control Methods
 
-### 지원하는 제어 방법
+**scrcpy Mirroring (Default)**
+- High-quality screen mirroring
+- Real-time touch and key control
+- Supports both WiFi and USB connections
 
-1. **scrcpy 미러링** (기본)
-   - 고품질 화면 미러링
-   - 실시간 터치 및 키 제어
-   - WiFi 및 USB 연결 지원
+**ADB Command Control**
+- Touch, swipe, and key input
+- Text input support
+- Multi-device support
 
-2. **ADB 명령어 제어**
-   - 터치, 스와이프, 키 입력
-   - 텍스트 입력 지원
-   - 다중 디바이스 지원
+### Runtime Controls
 
-### 런타임 제어
+- A key: Display Android device status info
+- R key: Restart Android mirroring
+- F key: Toggle gesture info overlay
+- T key: Adjust transparency
 
-- **A 키**: Android 디바이스 상태 정보 표시
-- **R 키**: Android 미러링 재시작
-- **F 키**: 제스처 정보 토글
-- **T 키**: 투명도 조절
+## Performance Optimization
 
-## 📊 성능 최적화
+- GPU memory: allocate 128MB or more
+- Camera resolution: 640x480 recommended
+- Frame rate: 30 FPS
+- Gesture confidence threshold: 0.7 or higher
 
-- **GPU 메모리**: 128MB 이상 할당
-- **카메라 해상도**: 640x480 권장
-- **프레임 레이트**: 30 FPS
-- **제스처 임계값**: 0.7 이상
-
-## 🤝 기여하기
+## Contributing
 
 1. Fork the repository
 2. Create a feature branch
@@ -337,14 +347,14 @@ scrcpy --no-audio --max-fps=30
 4. Push to the branch
 5. Create a Pull Request
 
-## 📄 라이선스
+## License
 
-이 프로젝트는 MIT 라이선스 하에 배포됩니다.
+This project is distributed under the MIT License.
 
-## 📞 지원
+## Support
 
-문제가 발생하거나 질문이 있으시면 이슈를 생성해 주세요.
+If you encounter issues or have questions, please open an issue in the repository.
 
 ---
 
-**주의**: 이 프로젝트는 교육 및 연구 목적으로 제작되었습니다. 상업적 사용 시 관련 라이선스를 확인하시기 바랍니다.
+Note: This project was created for educational and research purposes. Please verify relevant licenses before any commercial use.
